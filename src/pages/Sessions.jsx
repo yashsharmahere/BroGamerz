@@ -105,7 +105,6 @@ const LogEntry = memo(function LogEntry({ entry, onEdit }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <p className={`text-sm font-semibold ${color}`}>{entry.station || `Station ${entry.stationIndex}`}</p>
-          {entry.fromCloud && <span className="text-[10px] text-text-muted bg-bg-secondary px-1.5 py-0.5 rounded-full">cloud</span>}
           {entry.editedAt && <span className="text-[10px] text-text-muted bg-bg-secondary px-1.5 py-0.5 rounded-full">edited</span>}
         </div>
         <p className="text-xs text-text-muted mt-0.5">

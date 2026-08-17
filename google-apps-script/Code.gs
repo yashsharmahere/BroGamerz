@@ -404,6 +404,111 @@ function getExpensesList() {
   return { expenses }
 }
 
+// ─── Firebase REST Sync (onEdit trigger) ─────────────────────────────────────
+const FIREBASE_URL = 'https://brogamerz-default-rtdb.asia-southeast1.firebasedatabase.app/brogamerz'
+
+// Run this once from Apps Script editor to install the trigger
+function setupTrigger() {
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'onSheetEdit')
+    .forEach(t => ScriptApp.deleteTrigger(t))
+  ScriptApp.newTrigger('onSheetEdit').forSpreadsheet(ss).onEdit().create()
+  Logger.log('onSheetEdit trigger installed')
+}
+
+function firebasePut(path, data) {
+  UrlFetchApp.fetch(FIREBASE_URL + path + '.json', {
+    method: 'PUT',
+    contentType: 'application/json',
+    payload: JSON.stringify(data),
+    muteHttpExceptions: true,
+  })
+}
+
+function firebaseDelete(path) {
+  UrlFetchApp.fetch(FIREBASE_URL + path + '.json', {
+    method: 'DELETE',
+    muteHttpExceptions: true,
+  })
+}
+
+function stableIdGs(dateStr, offset) {
+  try { return new Date(dateStr + 'T00:00:00').getTime() + offset }
+  catch(e) { return Date.now() + offset }
+}
+
+function onSheetEdit(e) {
+  const sheet = e.range.getSheet()
+  const row = e.range.getRow()
+  try {
+    switch (sheet.getName()) {
+      case 'Daily Revenue': syncDailyRevenueRow(sheet, row); break
+      case 'Sessions':      syncSessionRow(sheet, row);      break
+      case 'Expenses':      syncExpenseRow(sheet, row);      break
+      case 'Udhar':         syncUdharRow(sheet, row);        break
+    }
+  } catch(err) { Logger.log('onSheetEdit error: ' + err.message) }
+}
+
+function syncDailyRevenueRow(sheet, row) {
+  if (row <= 1) return
+  const r = sheet.getRange(row, 1, 1, 7).getValues()[0]
+  if (!r[0]) return
+  const dateStr = typeof r[0] === 'string' ? r[0] : Utilities.formatDate(new Date(r[0]), 'Asia/Kolkata', 'yyyy-MM-dd')
+  const base = stableIdGs(dateStr, (row - 2) * 10)
+  const savedAt = new Date(dateStr + 'T00:00:00').toISOString()
+  const customers = Number(r[5]) || 1
+  const notes = r[6] || ''
+  const ps5_1 = Number(r[1]) || 0
+  const ps5_2 = Number(r[2]) || 0
+  const other  = Number(r[3]) || 0
+  if (ps5_1 > 0) firebasePut('/sessions/' + (base+1), { id: base+1, date: dateStr, station: 'PS5 Station 1', stationIndex: 1, amount: ps5_1, players: customers, durationMins: 0, notes, savedAt })
+  else firebaseDelete('/sessions/' + (base+1))
+  if (ps5_2 > 0) firebasePut('/sessions/' + (base+2), { id: base+2, date: dateStr, station: 'PS5 Station 2', stationIndex: 2, amount: ps5_2, players: customers, durationMins: 0, notes, savedAt })
+  else firebaseDelete('/sessions/' + (base+2))
+  if (other > 0) firebasePut('/sessions/' + (base+3), { id: base+3, date: dateStr, station: 'Other', stationIndex: 0, amount: other, players: 0, durationMins: 0, notes, savedAt })
+  else firebaseDelete('/sessions/' + (base+3))
+}
+
+function syncSessionRow(sheet, row) {
+  if (row <= 1) return
+  const r = sheet.getRange(row, 1, 1, 10).getValues()[0]
+  if (!r[0]) return
+  const id = Number(r[0]) || String(r[0])
+  const dateStr = typeof r[1] === 'string' ? r[1] : Utilities.formatDate(new Date(r[1]), 'Asia/Kolkata', 'yyyy-MM-dd')
+  firebasePut('/sessions/' + id, {
+    id, date: dateStr, station: r[2], stationIndex: Number(r[3]), amount: Number(r[4]),
+    players: Number(r[5]) || 1, durationMins: Number(r[6]) || 0, notes: r[7] || '',
+    savedAt: r[8] ? String(r[8]) : dateStr,
+  })
+}
+
+function syncExpenseRow(sheet, row) {
+  if (row <= 1) return
+  const r = sheet.getRange(row, 1, 1, 8).getValues()[0]
+  if (!r[0]) return
+  const dateStr = typeof r[0] === 'string' ? r[0] : Utilities.formatDate(new Date(r[0]), 'Asia/Kolkata', 'yyyy-MM-dd')
+  const id = stableIdGs(dateStr, row)
+  firebasePut('/expenses/' + id, {
+    id, date: dateStr, paidBy: r[1] || '', category: r[2] || 'Miscellaneous',
+    description: r[3] || '', amount: Number(r[4]) || 0, paymentMethod: r[5] || 'Cash',
+    recurring: r[6] || 'One-time', notes: r[7] || '', savedAt: new Date().toISOString(),
+  })
+}
+
+function syncUdharRow(sheet, row) {
+  if (row <= 1) return
+  const r = sheet.getRange(row, 1, 1, 7).getValues()[0]
+  if (!r[0]) return
+  const dateStr = typeof r[0] === 'string' ? r[0] : Utilities.formatDate(new Date(r[0]), 'Asia/Kolkata', 'yyyy-MM-dd')
+  const id = stableIdGs(dateStr, row)
+  firebasePut('/udhar/' + id, {
+    id, date: dateStr, customerName: r[1] || '', type: r[2] || 'udhar',
+    amount: Number(r[3]) || 0, notes: r[4] || '', settled: r[5] === 'Yes',
+    settledAt: r[6] ? String(r[6]) : null, savedAt: new Date().toISOString(),
+  })
+}
+
 // ─── Get Daily Revenue ────────────────────────────────────────────────────────
 function getDailyRevenue(month) {
   const sheet = ss.getSheetByName('Daily Revenue')
