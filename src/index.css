@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+    box-sizing: border-box;
+  }
+
+  html, body, #root {
+    height: 100%;
+    background-color: #0a0a0f;
+    color: #f1f5f9;
+    font-family: 'Inter', sans-serif;
+    overscroll-behavior: none;
+  }
+
+  input, select, textarea, button {
+    font-family: inherit;
+  }
+
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+}
+
+@layer components {
+  .timer-display {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.05em;
+  }
+
+  .btn-primary {
+    @apply bg-accent-blue text-white font-semibold py-3 px-6 rounded-xl
+           active:scale-95 transition-all duration-150 select-none
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .btn-danger {
+    @apply bg-accent-red text-white font-semibold py-3 px-6 rounded-xl
+           active:scale-95 transition-all duration-150 select-none;
+  }
+
+  .btn-ghost {
+    @apply text-text-secondary font-medium py-3 px-6 rounded-xl
+           active:scale-95 transition-all duration-150 select-none
+           border border-border;
+  }
+
+  .card {
+    @apply bg-bg-card rounded-2xl border border-border p-4;
+  }
+
+  .input-field {
+    @apply w-full bg-bg-secondary border border-border rounded-xl px-4 py-3
+           text-text-primary placeholder-text-muted
+           focus:outline-none focus:border-accent-blue focus:ring-1 focus:ring-accent-blue
+           transition-colors duration-150;
+  }
+
+  .label {
+    @apply text-xs font-medium text-text-secondary uppercase tracking-wider mb-1.5 block;
+  }
+
+  .badge-active {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full
+           bg-accent-green/10 text-accent-green text-xs font-medium;
+  }
+
+  .badge-idle {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full
+           bg-text-muted/20 text-text-muted text-xs font-medium;
+  }
+
+  .stat-card {
+    @apply bg-bg-card rounded-xl border border-border p-4 flex flex-col gap-1;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #252535; border-radius: 2px; }
+
+/* Safe area padding for notch/home bar */
+.safe-top { padding-top: env(safe-area-inset-top); }
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
