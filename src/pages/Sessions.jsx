@@ -8,7 +8,7 @@ import {
   appendRevenue, loadRevenueLog, updateRevenue, deleteRevenue, getDayStationTotal
 } from '../services/storage'
 import { logSession, updateDayRevenue, updateSessionInSheet, deleteSessionFromSheet } from '../services/sheetsApi'
-import { writeSession, updateSessionFb, deleteSessionFb, subscribeSessions, subscribeConnected } from '../services/firebaseDb'
+import { writeSession, updateSessionFb, deleteSessionFb, subscribeSessions, subscribeConnected, subscribeDeletedSessions } from '../services/firebaseDb'
 import { playConfirmBeep, requestNotificationPermission } from '../services/audio'
 
 function formatTime(secs) {
@@ -215,6 +215,7 @@ export default function Sessions() {
   const [editingEntry, setEditingEntry] = useState(null)
   const [log, setLog] = useState(() => loadRevenueLog())
   const [firebaseSessions, setFirebaseSessions] = useState([])
+  const [deletedIds, setDeletedIds] = useState({})
   const [isLive, setIsLive] = useState(false)
   const toast = useToast()
 
@@ -224,7 +225,20 @@ export default function Sessions() {
   useEffect(() => {
     const unsubSessions = subscribeSessions(data => setFirebaseSessions(data))
     const unsubConnected = subscribeConnected(connected => setIsLive(connected))
-    return () => { unsubSessions(); unsubConnected() }
+    const unsubDeleted = subscribeDeletedSessions(deleted => {
+      setDeletedIds(deleted)
+      const ids = Object.keys(deleted)
+      if (ids.length === 0) return
+      // Remove sheet-deleted sessions from localStorage so they disappear on this device too
+      const deletedSet = new Set(ids.map(String))
+      const current = loadRevenueLog()
+      const hits = current.filter(e => deletedSet.has(String(e.id)))
+      if (hits.length > 0) {
+        hits.forEach(e => deleteRevenue(e.id))
+        setLog(loadRevenueLog())
+      }
+    })
+    return () => { unsubSessions(); unsubConnected(); unsubDeleted() }
   }, [])
 
   const refreshLog = useCallback(() => setLog(loadRevenueLog()), [])
@@ -294,8 +308,10 @@ export default function Sessions() {
       const key = String(s.id)
       if (!byId[key]) byId[key] = { ...s, fromCloud: true }
     })
-    return Object.values(byId).sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-  }, [log, firebaseSessions])
+    return Object.values(byId)
+      .filter(e => !deletedIds[String(e.id)])
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+  }, [log, firebaseSessions, deletedIds])
 
   const totalActive = sessions.filter(s => s.isRunning).length
   const totalRevenue = sessions.reduce((sum, s) => sum + (s.isRunning ? s.currentCharge : 0), 0)

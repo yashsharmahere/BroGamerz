@@ -35,6 +35,10 @@ export const updateSessionFb = (id, updates) =>
 
 export const deleteSessionFb = (id) => remove(R(`sessions/${id}`))
 
+// ─── Deleted Sessions (sheet→app delete sync) ─────────────────────────────────
+export const subscribeDeletedSessions = (cb) =>
+  onValue(R('deletedSessions'), snap => cb(snap.val() ?? {}))
+
 // ─── Expenses ─────────────────────────────────────────────────────────────────
 export const subscribeExpenses = (cb) =>
   onValue(R('expenses'), snap => {

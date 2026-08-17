@@ -427,7 +427,18 @@ function firebasePut(path, data) {
 
 function firebaseDelete(path) {
   UrlFetchApp.fetch(FIREBASE_URL + path + '.json', {
-    method: 'DELETE',
+    method: 'PUT',
+    contentType: 'application/json',
+    payload: 'null',
+    muteHttpExceptions: true,
+  })
+}
+
+function markDeleted(id) {
+  UrlFetchApp.fetch(FIREBASE_URL + '/deletedSessions/' + id + '.json', {
+    method: 'PUT',
+    contentType: 'application/json',
+    payload: 'true',
     muteHttpExceptions: true,
   })
 }
@@ -495,20 +506,25 @@ function syncStationEntry(dateStr, stationIndex, amount, customers, notes, saved
 
   if (ids.length > 0) {
     if (amount === 0) {
-      // Clear from sheet → DELETE all matching sessions from Firebase
-      ids.forEach(id => firebaseDelete('/sessions/' + id))
+      // Cell cleared → delete from Firebase + write to deletedSessions so PWA clears localStorage too
+      ids.forEach(id => {
+        firebaseDelete('/sessions/' + id)
+        markDeleted(id)
+      })
     } else {
-      // Update first session, remove any duplicates
+      // Update primary session with new amount
       firebasePut('/sessions/' + ids[0], {
         id: ids[0], date: dateStr, station: sName, stationIndex, amount,
         players: customers, durationMins: 0, notes, savedAt,
       })
-      ids.slice(1).forEach(id => firebaseDelete('/sessions/' + id))
     }
+    // Always purge the stale fallback entry — this fixes customer count doubling
+    firebaseDelete('/sessions/' + fallbackId)
   } else {
     // No Sessions tab entry (manually entered in sheet) — use fallback ID
     if (amount === 0) {
       firebaseDelete('/sessions/' + fallbackId)
+      markDeleted(fallbackId)
     } else {
       firebasePut('/sessions/' + fallbackId, {
         id: fallbackId, date: dateStr, station: sName, stationIndex, amount,
@@ -516,6 +532,18 @@ function syncStationEntry(dateStr, stationIndex, amount, customers, notes, saved
       })
     }
   }
+}
+
+// Run once from Apps Script editor → cleans up all stale Firebase duplicates
+function forceSync() {
+  const sheet = ss.getSheetByName('Daily Revenue')
+  if (!sheet) { Logger.log('No Daily Revenue sheet'); return }
+  const data = sheet.getDataRange().getValues()
+  let count = 0
+  for (let row = 2; row <= data.length; row++) {
+    if (data[row - 1][0]) { syncDailyRevenueRow(sheet, row); count++ }
+  }
+  Logger.log('Force synced ' + count + ' rows')
 }
 
 function syncSessionRow(sheet, row) {
