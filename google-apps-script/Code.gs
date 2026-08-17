@@ -46,6 +46,7 @@ function doGet(e) {
       case 'getDailyRevenue':    result = getDailyRevenue(e.parameter.month);  break
       case 'getActiveSessions':  result = getActiveSessions();                  break
       case 'getSessions':        result = getSessions(e.parameter.month);       break
+      case 'getExpenses':        result = getExpensesList();                     break
       default:                result = { error: 'Unknown action' }
     }
 
@@ -380,8 +381,6 @@ function getActiveSessions() {
   return { sessions: raw ? JSON.parse(raw) : null, serverTime: Date.now() }
 }
 
-<<<<<<< Updated upstream
-=======
 // ─── Get All Expenses ─────────────────────────────────────────────────────────
 function getExpensesList() {
   const sheet = ss.getSheetByName('Expenses')
@@ -510,7 +509,6 @@ function syncUdharRow(sheet, row) {
   })
 }
 
->>>>>>> Stashed changes
 // ─── Get Daily Revenue ────────────────────────────────────────────────────────
 function getDailyRevenue(month) {
   const sheet = ss.getSheetByName('Daily Revenue')
