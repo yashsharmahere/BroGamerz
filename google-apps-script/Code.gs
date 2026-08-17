@@ -427,9 +427,7 @@ function firebasePut(path, data) {
 
 function firebaseDelete(path) {
   UrlFetchApp.fetch(FIREBASE_URL + path + '.json', {
-    method: 'PUT',
-    contentType: 'application/json',
-    payload: 'null',
+    method: 'DELETE',
     muteHttpExceptions: true,
   })
 }
@@ -437,6 +435,26 @@ function firebaseDelete(path) {
 function stableIdGs(dateStr, offset) {
   try { return new Date(dateStr + 'T00:00:00').getTime() + offset }
   catch(e) { return Date.now() + offset }
+}
+
+function stationNameFromIdx(idx) {
+  return idx === 1 ? 'PS5 Station 1' : idx === 2 ? 'PS5 Station 2' : 'Other'
+}
+
+// Look up the Sessions tab to find real Firebase IDs for a given date + stationIndex
+function getSessionIdsForDateStation(dateStr, stationIndex) {
+  const sheet = ss.getSheetByName('Sessions')
+  if (!sheet) return []
+  const data = sheet.getDataRange().getValues().slice(1)
+  const ids = []
+  for (const r of data) {
+    if (!r[0] || !r[1]) continue
+    const d = typeof r[1] === 'string' ? r[1] : Utilities.formatDate(new Date(r[1]), 'Asia/Kolkata', 'yyyy-MM-dd')
+    if (d === dateStr && Number(r[3]) === stationIndex) {
+      ids.push(Number(r[0]) || String(r[0]))
+    }
+  }
+  return ids
 }
 
 function onSheetEdit(e) {
@@ -457,17 +475,47 @@ function syncDailyRevenueRow(sheet, row) {
   const r = sheet.getRange(row, 1, 1, 7).getValues()[0]
   if (!r[0]) return
   const dateStr = typeof r[0] === 'string' ? r[0] : Utilities.formatDate(new Date(r[0]), 'Asia/Kolkata', 'yyyy-MM-dd')
-  const base = stableIdGs(dateStr, (row - 2) * 10)
-  const savedAt = new Date(dateStr + 'T00:00:00').toISOString()
-  const customers = Number(r[5]) || 1
-  const notes = r[6] || ''
   const ps5_1 = Number(r[1]) || 0
   const ps5_2 = Number(r[2]) || 0
   const other  = Number(r[3]) || 0
-  // Always PUT all three — amount:0 entries are filtered on the client (amount > 0)
-  firebasePut('/sessions/' + (base+1), { id: base+1, date: dateStr, station: 'PS5 Station 1', stationIndex: 1, amount: ps5_1, players: customers, durationMins: 0, notes, savedAt })
-  firebasePut('/sessions/' + (base+2), { id: base+2, date: dateStr, station: 'PS5 Station 2', stationIndex: 2, amount: ps5_2, players: customers, durationMins: 0, notes, savedAt })
-  firebasePut('/sessions/' + (base+3), { id: base+3, date: dateStr, station: 'Other', stationIndex: 0, amount: other, players: 0, durationMins: 0, notes, savedAt })
+  const customers = Number(r[5]) || 1
+  const notes = r[6] || ''
+  const savedAt = new Date(dateStr + 'T00:00:00').toISOString()
+  const base = stableIdGs(dateStr, (row - 2) * 10)
+
+  syncStationEntry(dateStr, 1, ps5_1, customers, notes, savedAt, base + 1)
+  syncStationEntry(dateStr, 2, ps5_2, customers, notes, savedAt, base + 2)
+  syncStationEntry(dateStr, 0, other, 0, notes, savedAt, base + 3)
+}
+
+// Sync one station's value to Firebase, using real session IDs from the Sessions tab
+function syncStationEntry(dateStr, stationIndex, amount, customers, notes, savedAt, fallbackId) {
+  const sName = stationNameFromIdx(stationIndex)
+  const ids = getSessionIdsForDateStation(dateStr, stationIndex)
+
+  if (ids.length > 0) {
+    if (amount === 0) {
+      // Clear from sheet → DELETE all matching sessions from Firebase
+      ids.forEach(id => firebaseDelete('/sessions/' + id))
+    } else {
+      // Update first session, remove any duplicates
+      firebasePut('/sessions/' + ids[0], {
+        id: ids[0], date: dateStr, station: sName, stationIndex, amount,
+        players: customers, durationMins: 0, notes, savedAt,
+      })
+      ids.slice(1).forEach(id => firebaseDelete('/sessions/' + id))
+    }
+  } else {
+    // No Sessions tab entry (manually entered in sheet) — use fallback ID
+    if (amount === 0) {
+      firebaseDelete('/sessions/' + fallbackId)
+    } else {
+      firebasePut('/sessions/' + fallbackId, {
+        id: fallbackId, date: dateStr, station: sName, stationIndex, amount,
+        players: customers, durationMins: 0, notes, savedAt,
+      })
+    }
+  }
 }
 
 function syncSessionRow(sheet, row) {
