@@ -3,13 +3,14 @@
 // 2. Add a Web App → copy the firebaseConfig object values below
 // 3. Build → Realtime Database → Create database → Start in test mode → pick Asia region
 export const FIREBASE_CONFIG = {
-  apiKey:            'YOUR_API_KEY',
-  authDomain:        'YOUR_PROJECT.firebaseapp.com',
-  databaseURL:       'https://YOUR_PROJECT-default-rtdb.asia-southeast1.firebasedatabase.app',
-  projectId:         'YOUR_PROJECT',
-  storageBucket:     'YOUR_PROJECT.appspot.com',
-  messagingSenderId: 'YOUR_SENDER_ID',
-  appId:             'YOUR_APP_ID',
+  apiKey:            'AIzaSyDHD39Xd2exJuFAMOMkCTRp-U9DXTo-jAQ',
+  authDomain:        'brogamerz.firebaseapp.com',
+  databaseURL:       'https://brogamerz-default-rtdb.asia-southeast1.firebasedatabase.app',
+  projectId:         'brogamerz',
+  storageBucket:     'brogamerz.firebasestorage.app',
+  messagingSenderId: '650102833707',
+  appId:             '1:650102833707:web:15ea54853ce533ac83a06e',
+  measurementId:     'G-LBSZ1HT9TY',
 }
 
 // ─── Google Sheets Configuration (backup — still receives all writes) ─────────
