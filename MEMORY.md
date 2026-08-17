@@ -323,3 +323,8 @@ npm run preview  # Preview /dist locally
 
 - Main branch: `main`
 - Claude's feature branch: `claude/brogamerz-github-auth-rm32ni`
+
+## Deployment
+
+- **Vercel**: `brogamerz-app.vercel.app` — auto-deploys on push to `main`
+- Firebase Hosting: not used (Vercel handles frontend)
