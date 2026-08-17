@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { IndianRupee, Calendar, CheckCircle, ChevronDown, ChevronUp, Receipt } from 'lucide-react'
 import { appendExpense, loadExpenseLog } from '../services/storage'
 import { logExpense } from '../services/sheetsApi'
+import { writeExpense } from '../services/firebaseDb'
 import { useToast } from '../components/Toast'
 import { playConfirmBeep } from '../services/audio'
 import { EXPENSE_CATEGORIES, PAYMENT_METHODS, OWNERS } from '../config'
@@ -56,7 +57,8 @@ export default function AddExpense() {
         ...form,
         amount: parseInt(form.amount, 10),
       }
-      appendExpense(entry)
+      const saved = appendExpense(entry)
+      writeExpense(saved).catch(() => {})
       logExpense(entry).catch(() => {})
       setLog([...loadExpenseLog()].reverse())
 

@@ -25,10 +25,10 @@ Core jobs:
 | Routing | React Router v6 |
 | Icons | lucide-react |
 | PWA | vite-plugin-pwa |
-| Backend | Google Apps Script Web App (no server) |
-| Database | Google Sheets (Spreadsheet ID: `1EWFKh46f8c4bkxYbx0A-AekARfQj5Fmr0-2dTDvYav8`) |
-| Local persistence | `localStorage` (offline-capable) |
-| Cross-device sync | Apps Script PropertiesService + polling |
+| Real-time DB | **Firebase Realtime Database** (WebSocket, instant sync) |
+| Backup DB | Google Sheets via Apps Script (all writes go here too) |
+| Local persistence | `localStorage` (device cache, offline fallback) |
+| Cross-device sync | Firebase `onValue` listeners — no polling |
 
 ---
 
@@ -37,7 +37,7 @@ Core jobs:
 ```
 src/
   App.jsx                  — Router + ToastProvider wrapper
-  config.js                — Central config (URL, pricing, stations, categories)
+  config.js                — Central config (Firebase, Sheets URL, pricing, stations)
   main.jsx                 — React entry point
   index.css                — Global styles + Tailwind directives
 
@@ -46,7 +46,7 @@ src/
     AddData.jsx            — Log other revenue + customer count
     AddExpense.jsx         — Log business expenses
     Udhar.jsx              — Track customer credit (udhar) + advance payments
-    Dashboard.jsx          — Stats: today / month / all-time
+    Dashboard.jsx          — Stats: today / month / all-time (all live from Firebase)
 
   components/
     Navigation.jsx         — Fixed bottom tab bar (5 tabs)
@@ -55,15 +55,16 @@ src/
     Toast.jsx              — Toast notification system (context-based)
 
   hooks/
-    useSessions.js         — Core session state: timer, pricing, cloud sync
+    useSessions.js         — Core session state: timer, pricing, Firebase sync
 
   services/
-    sheetsApi.js           — All calls to Google Apps Script (POST/GET)
-    storage.js             — localStorage CRUD for sessions, revenue, expenses, udhar
+    firebaseDb.js          — Firebase Realtime DB: all listeners + write helpers
+    sheetsApi.js           — Google Apps Script calls (backup writes only)
+    storage.js             — localStorage CRUD (device cache / offline fallback)
     audio.js               — Web Audio API: confirm beep, hourly chime, notifications
 
 google-apps-script/
-  Code.gs                  — The entire backend (runs inside Google Sheets)
+  Code.gs                  — Google Sheets backend (still receives all writes as backup)
 ```
 
 ---
@@ -71,6 +72,10 @@ google-apps-script/
 ## Config (`src/config.js`)
 
 ```js
+// Firebase (fill in after creating project at console.firebase.google.com)
+FIREBASE_CONFIG = { apiKey, authDomain, databaseURL, projectId, storageBucket, messagingSenderId, appId }
+
+// Google Sheets (backup — still receives all writes)
 APPS_SCRIPT_URL  = 'https://script.google.com/macros/s/AKfycbz0zA6jVndUlhnvAYEOz9bba0JUhjfNkTTxD0zC1V7Py4bED6ZerRyQ_UzApHrCDprA/exec'
 SPREADSHEET_ID   = '1EWFKh46f8c4bkxYbx0A-AekARfQj5Fmr0-2dTDvYav8'
 
@@ -159,21 +164,64 @@ All IDs are `Date.now()` timestamps.
 
 ---
 
-## Cross-Device Sync Flow
+## Cross-Device Sync Flow (Firebase)
 
 ```
 Device A starts session
   → startSession() updates localStorage
-  → pushToCloud() (debounced 300ms) → saveActiveSessions() to PropertiesService
+  → pushToCloud() (debounced 300ms) → pushActiveSessions() to Firebase RTDB
 
-Device B polls getActiveSessions() every 10s
-  → sees isRunning: true for that station
-  → merges into local state, updates localStorage
-  → timer starts ticking on Device B too
+Device B has onValue listener on brogamerz/activeSessions
+  → Firebase pushes change instantly (WebSocket, <1s)
+  → useSessions merges cloud state into local, saves to localStorage
+  → timer starts ticking on Device B
 
-Session log (completed sessions) synced via Sessions sheet tab
-  → getSessions() fetched every 15s on Sessions page
-  → merged with local log by ID
+Session log: subscribeSessions() on brogamerz/sessions
+  → any completed session appears on all devices instantly
+  → local entries + Firebase entries merged by ID in mergedLog
+
+Dashboard: subscribeSessions + subscribeExpenses + subscribeUdhar
+  → all stats computed client-side from live Firebase data
+  → updates instantly when any entry changes anywhere
+
+Sheets: still receives every write as a fire-and-forget backup
+  → logSession, logExpense, logUdhar, updateDayRevenue all still called
+  → used for accounting history; NOT read from anymore (Firebase is source of truth)
+```
+
+## Firebase Database Structure
+
+```
+brogamerz/
+  activeSessions/
+    ps5_1: { id, isRunning, startTime, accumulatedSecs, players, lastHourNotified }
+    ps5_2: { ... }
+
+  sessions/
+    {timestamp-id}: { id, date, station, stationIndex, amount, players, durationMins, notes, savedAt, editedAt }
+
+  expenses/
+    {timestamp-id}: { id, date, paidBy, category, description, amount, paymentMethod, recurring, notes, savedAt }
+
+  udhar/
+    {timestamp-id}: { id, customerName, amount, type, date, notes, settled, settledAt, savedAt }
+```
+
+## Firebase Setup (for new environments)
+
+1. Go to console.firebase.google.com → Create project → "brogamerz"
+2. Add Web App → copy `firebaseConfig` into `src/config.js → FIREBASE_CONFIG`
+3. Build → Realtime Database → Create database → **Start in test mode** → pick Asia region
+4. Set Database Rules (Realtime Database → Rules tab):
+```json
+{
+  "rules": {
+    "brogamerz": {
+      ".read": true,
+      ".write": true
+    }
+  }
+}
 ```
 
 ---

@@ -1,6 +1,18 @@
-// ─── Google Sheets Configuration ────────────────────────────────────────────
-// After deploying the Google Apps Script (see /google-apps-script/Code.gs),
-// paste the Web App URL below.
+// ─── Firebase Configuration ───────────────────────────────────────────────────
+// 1. Go to console.firebase.google.com → Create project → "brogamerz"
+// 2. Add a Web App → copy the firebaseConfig object values below
+// 3. Build → Realtime Database → Create database → Start in test mode → pick Asia region
+export const FIREBASE_CONFIG = {
+  apiKey:            'YOUR_API_KEY',
+  authDomain:        'YOUR_PROJECT.firebaseapp.com',
+  databaseURL:       'https://YOUR_PROJECT-default-rtdb.asia-southeast1.firebasedatabase.app',
+  projectId:         'YOUR_PROJECT',
+  storageBucket:     'YOUR_PROJECT.appspot.com',
+  messagingSenderId: 'YOUR_SENDER_ID',
+  appId:             'YOUR_APP_ID',
+}
+
+// ─── Google Sheets Configuration (backup — still receives all writes) ─────────
 export const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz0zA6jVndUlhnvAYEOz9bba0JUhjfNkTTxD0zC1V7Py4bED6ZerRyQ_UzApHrCDprA/exec'
 
 // Your Google Spreadsheet ID (from the URL)

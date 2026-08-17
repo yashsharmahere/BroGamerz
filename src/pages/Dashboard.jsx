@@ -1,19 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
-import { TrendingUp, TrendingDown, Users, Gamepad2, IndianRupee, RefreshCw, Wifi, WifiOff } from 'lucide-react'
-import {
-  loadRevenueLog, loadExpenseLog, loadUdharLog,
-  getTodayRevenue, getTodayCustomers, getMonthRevenue
-} from '../services/storage'
-import { getDashboard, configured } from '../services/sheetsApi'
-
-// ─── Session cache (survives tab switches, cleared on browser close) ──────────
-const CACHE_KEY = 'bg_dash_cache'
-function getCache() {
-  try { return JSON.parse(sessionStorage.getItem(CACHE_KEY) || 'null') } catch { return null }
-}
-function setCache(data) {
-  try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(data)) } catch {}
-}
+import { useState, useEffect, useMemo } from 'react'
+import { TrendingUp, TrendingDown, Users, Gamepad2, IndianRupee } from 'lucide-react'
+import { subscribeSessions, subscribeExpenses, subscribeUdhar, subscribeConnected } from '../services/firebaseDb'
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
 function StatCard({ label, value, sub, icon: Icon, color = 'blue' }) {
@@ -67,25 +54,6 @@ function SkeletonCard() {
   )
 }
 
-function SyncBadge({ status, syncedAt }) {
-  if (status === 'syncing') return (
-    <div className="flex items-center gap-1.5 text-xs text-text-muted">
-      <RefreshCw size={11} className="animate-spin" />Syncing…
-    </div>
-  )
-  if (status === 'error') return (
-    <div className="flex items-center gap-1.5 text-xs text-accent-orange">
-      <WifiOff size={11} />Sheet offline
-    </div>
-  )
-  if (status === 'synced') return (
-    <div className="flex items-center gap-1.5 text-xs text-accent-green">
-      <Wifi size={11} />{syncedAt ? `Synced ${syncedAt}` : 'Synced'}
-    </div>
-  )
-  return null
-}
-
 const CAT_COLORS = {
   'Equipment': 'blue', 'Game Purchase': 'purple', 'Repairs/Maintenance': 'orange',
   'Miscellaneous': 'red', 'Marketing': 'green', 'Rent': 'orange',
@@ -94,76 +62,66 @@ const CAT_COLORS = {
 
 // ─── Main ──────────────────────────────────────────────────────────────────────
 export default function Dashboard() {
-  const [local, setLocal]           = useState(null)
-  const [sheets, setSheets]         = useState(() => getCache())  // init from cache instantly
-  const [syncStatus, setSyncStatus] = useState(() => getCache() ? 'synced' : 'idle')
-  const [syncedAt, setSyncedAt]     = useState(null)
-  const [fetching, setFetching]     = useState(false)
-
-  const buildLocal = useCallback(() => {
-    const expenses = loadExpenseLog()
-    const udhar    = loadUdharLog()
-    const month    = new Date().toLocaleDateString('en-CA').slice(0, 7)
-    return {
-      todayCustomers:  getTodayCustomers(),
-      monthExpenses:   expenses.filter(e => e.date?.startsWith(month)).reduce((s, e) => s + (e.amount || 0), 0),
-      pendingUdhar:    udhar.filter(e => !e.settled && e.type === 'udhar').reduce((s, e) => s + e.amount, 0),
-      pendingAdvance:  udhar.filter(e => !e.settled && e.type === 'advance').reduce((s, e) => s + e.amount, 0),
-    }
-  }, [])
-
-  const fetchSheets = useCallback(async () => {
-    if (!configured() || fetching) return
-    setFetching(true)
-    setSyncStatus('syncing')
-    try {
-      const res = await getDashboard()
-      if (res.ok && res.data && !res.data.error) {
-        setSheets(res.data)
-        setCache(res.data)
-        setSyncStatus('synced')
-        setSyncedAt(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }))
-      } else {
-        setSyncStatus('error')
-      }
-    } catch {
-      setSyncStatus('error')
-    } finally {
-      setFetching(false)
-    }
-  }, [fetching])
+  const [sessions,  setSessions]  = useState(null)   // null = not yet loaded
+  const [expenses,  setExpenses]  = useState(null)
+  const [udhar,     setUdhar]     = useState(null)
+  const [isLive,    setIsLive]    = useState(false)
 
   useEffect(() => {
-    setLocal(buildLocal())
-    fetchSheets()
-  }, [])  // only on mount — cache handles re-visits
+    const unsubS = subscribeSessions(data  => setSessions(data))
+    const unsubE = subscribeExpenses(data  => setExpenses(data))
+    const unsubU = subscribeUdhar(data     => setUdhar(data))
+    const unsubC = subscribeConnected(live => setIsLive(live))
+    return () => { unsubS(); unsubE(); unsubU(); unsubC() }
+  }, [])
 
-  const handleRefresh = () => {
-    setLocal(buildLocal())
-    setFetching(false)   // reset so fetchSheets runs
-    setTimeout(fetchSheets, 0)
-  }
+  const stats = useMemo(() => {
+    if (!sessions || !expenses || !udhar) return null
 
-  const s = sheets
-  const l = local || {}
+    const today = new Date().toLocaleDateString('en-CA')
+    const month = today.slice(0, 7)
 
-  // ── Numbers ────────────────────────────────────────────────────────────────
-  const todayRevenue   = s?.today?.revenue   ?? 0
-  const todayCustomers = s?.today?.customers ?? 0   // from Sheet (requires Code.gs redeploy)
-  const monthRevenue   = s?.month?.revenue   ?? 0
-  const monthExpenses  = s?.month?.expenses  ?? (l.monthExpenses ?? 0)
-  const monthCustomers = s?.month?.customers ?? 0
-  const netProfit      = monthRevenue - monthExpenses
+    const todaySessions = sessions.filter(s => s.date === today)
+    const monthSessions = sessions.filter(s => s.date?.startsWith(month))
 
-  const ps5_1      = s?.allTime?.ps5_1    ?? 0
-  const ps5_2      = s?.allTime?.ps5_2    ?? 0
-  const otherRev   = s?.allTime?.otherRev ?? 0
-  const totalRev   = ps5_1 + ps5_2 + otherRev
-  const totalExp   = s?.allTime?.expenses ?? 0
+    const todayRevenue   = todaySessions.reduce((sum, s) => sum + (s.amount || 0), 0)
+    const todayCustomers = todaySessions.reduce((sum, s) => sum + (s.players || 0), 0)
 
-  const avgPerCust = monthCustomers > 0 ? Math.round(monthRevenue / monthCustomers) : 0
+    const monthRevenue   = monthSessions.reduce((sum, s) => sum + (s.amount || 0), 0)
+    const monthCustomers = monthSessions.reduce((sum, s) => sum + (s.players || 0), 0)
 
-  const sortedCats  = Object.entries(s?.categoryTotals ?? {}).sort((a, b) => b[1] - a[1])
+    const monthExpenses = expenses
+      .filter(e => e.date?.startsWith(month))
+      .reduce((sum, e) => sum + (e.amount || 0), 0)
+
+    const ps5_1  = sessions.filter(s => s.stationIndex === 1).reduce((sum, s) => sum + (s.amount || 0), 0)
+    const ps5_2  = sessions.filter(s => s.stationIndex === 2).reduce((sum, s) => sum + (s.amount || 0), 0)
+    const other  = sessions.filter(s => s.stationIndex === 0).reduce((sum, s) => sum + (s.amount || 0), 0)
+    const totalRev = ps5_1 + ps5_2 + other
+    const totalExp = expenses.reduce((sum, e) => sum + (e.amount || 0), 0)
+
+    const categoryTotals = {}
+    expenses.forEach(e => {
+      categoryTotals[e.category] = (categoryTotals[e.category] || 0) + (e.amount || 0)
+    })
+
+    const pendingUdhar   = udhar.filter(e => !e.settled && e.type === 'udhar').reduce((s, e) => s + e.amount, 0)
+    const pendingAdvance = udhar.filter(e => !e.settled && e.type === 'advance').reduce((s, e) => s + e.amount, 0)
+
+    return {
+      todayRevenue, todayCustomers,
+      monthRevenue, monthCustomers, monthExpenses,
+      netProfit: monthRevenue - monthExpenses,
+      ps5_1, ps5_2, other, totalRev, totalExp,
+      categoryTotals,
+      pendingUdhar, pendingAdvance,
+      avgPerCust: monthCustomers > 0 ? Math.round(monthRevenue / monthCustomers) : 0,
+    }
+  }, [sessions, expenses, udhar])
+
+  const loading = !stats
+  const s = stats ?? {}
+  const sortedCats = Object.entries(s.categoryTotals ?? {}).sort((a, b) => b[1] - a[1])
   const totalExpAll = sortedCats.reduce((sum, [, v]) => sum + v, 0)
 
   return (
@@ -172,14 +130,13 @@ export default function Dashboard() {
       <div className="px-4 pt-4 pb-3 flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-text-primary">Dashboard</h1>
-          <div className="mt-1">
-            <SyncBadge status={syncStatus} syncedAt={syncedAt} />
+          <div className="flex items-center gap-1.5 mt-1 text-xs">
+            {isLive
+              ? <><span className="w-1.5 h-1.5 rounded-full bg-accent-green animate-pulse" /><span className="text-accent-green">Live</span></>
+              : <><span className="w-1.5 h-1.5 rounded-full bg-text-muted" /><span className="text-text-muted">Offline</span></>
+            }
           </div>
         </div>
-        <button onClick={handleRefresh} disabled={fetching}
-          className="w-9 h-9 rounded-xl bg-bg-card border border-border flex items-center justify-center disabled:opacity-50">
-          <RefreshCw size={15} className={`text-text-secondary ${fetching ? 'animate-spin' : ''}`} />
-        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-5">
@@ -188,12 +145,12 @@ export default function Dashboard() {
         <section>
           <p className="text-[11px] font-semibold text-text-muted uppercase tracking-widest mb-2.5">Today</p>
           <div className="grid grid-cols-2 gap-3">
-            {!sheets && fetching ? (
+            {loading ? (
               <><SkeletonCard /><SkeletonCard /></>
             ) : (
               <>
-                <StatCard label="Revenue" value={`₹${todayRevenue.toLocaleString('en-IN')}`} icon={IndianRupee} color="green" />
-                <StatCard label="Customers" value={todayCustomers} icon={Users} color="blue" />
+                <StatCard label="Revenue"   value={`₹${s.todayRevenue.toLocaleString('en-IN')}`}   icon={IndianRupee} color="green" />
+                <StatCard label="Customers" value={s.todayCustomers}                                icon={Users}       color="blue" />
               </>
             )}
           </div>
@@ -205,48 +162,45 @@ export default function Dashboard() {
             {new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
           </p>
           <div className="grid grid-cols-2 gap-3">
-            {!sheets && fetching ? (
+            {loading ? (
               <><SkeletonCard /><SkeletonCard /><SkeletonCard /><SkeletonCard /></>
             ) : (
               <>
-                <StatCard label="Revenue" value={`₹${monthRevenue.toLocaleString('en-IN')}`} icon={TrendingUp} color="green" />
-                <StatCard label="Expenses" value={`₹${monthExpenses.toLocaleString('en-IN')}`} icon={TrendingDown} color="red" />
+                <StatCard label="Revenue"   value={`₹${s.monthRevenue.toLocaleString('en-IN')}`}   icon={TrendingUp}   color="green" />
+                <StatCard label="Expenses"  value={`₹${s.monthExpenses.toLocaleString('en-IN')}`}  icon={TrendingDown}  color="red" />
                 <StatCard
                   label="Net P&L"
-                  value={`₹${Math.abs(netProfit).toLocaleString('en-IN')}`}
-                  sub={monthRevenue > 0 || monthExpenses > 0 ? (netProfit >= 0 ? 'Profit' : 'Loss') : undefined}
-                  icon={netProfit >= 0 ? TrendingUp : TrendingDown}
-                  color={monthRevenue > 0 || monthExpenses > 0 ? (netProfit >= 0 ? 'green' : 'red') : 'green'}
+                  value={`₹${Math.abs(s.netProfit).toLocaleString('en-IN')}`}
+                  sub={s.monthRevenue > 0 || s.monthExpenses > 0 ? (s.netProfit >= 0 ? 'Profit' : 'Loss') : undefined}
+                  icon={s.netProfit >= 0 ? TrendingUp : TrendingDown}
+                  color={s.monthRevenue > 0 || s.monthExpenses > 0 ? (s.netProfit >= 0 ? 'green' : 'red') : 'green'}
                 />
-                <StatCard label="Customers" value={monthCustomers} icon={Users} color="blue" />
+                <StatCard label="Customers" value={s.monthCustomers} icon={Users} color="blue" />
               </>
             )}
           </div>
-          {avgPerCust > 0 && (
+          {!loading && s.avgPerCust > 0 && (
             <div className="mt-3 card flex items-center justify-between py-3">
               <p className="text-sm text-text-secondary">Avg revenue / customer</p>
-              <p className="text-sm font-bold text-text-primary">₹{avgPerCust.toLocaleString('en-IN')}</p>
+              <p className="text-sm font-bold text-text-primary">₹{s.avgPerCust.toLocaleString('en-IN')}</p>
             </div>
           )}
         </section>
 
         {/* STATION BREAKDOWN */}
-        {totalRev > 0 && (
+        {!loading && s.totalRev > 0 && (
           <div className="card flex flex-col gap-3.5">
             <p className="text-sm font-semibold text-text-primary">Revenue by Station</p>
-            <ProgressBar label="PS5 Station 1" amount={ps5_1} total={totalRev} color="blue" />
-            <ProgressBar label="PS5 Station 2" amount={ps5_2} total={totalRev} color="purple" />
-            {otherRev > 0 && <ProgressBar label="Other" amount={otherRev} total={totalRev} color="green" />}
+            <ProgressBar label="PS5 Station 1" amount={s.ps5_1}  total={s.totalRev} color="blue" />
+            <ProgressBar label="PS5 Station 2" amount={s.ps5_2}  total={s.totalRev} color="purple" />
+            {s.other > 0 && <ProgressBar label="Other" amount={s.other} total={s.totalRev} color="green" />}
           </div>
         )}
 
         {/* EXPENSE BREAKDOWN */}
-        {sortedCats.length > 0 && (
+        {!loading && sortedCats.length > 0 && (
           <div className="card flex flex-col gap-3.5">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold text-text-primary">Expenses by Category</p>
-              <span className="text-xs text-accent-green bg-accent-green/10 px-2 py-0.5 rounded-full">from Sheet</span>
-            </div>
+            <p className="text-sm font-semibold text-text-primary">Expenses by Category</p>
             {sortedCats.map(([cat, amt]) => (
               <ProgressBar key={cat} label={cat} amount={amt} total={totalExpAll} color={CAT_COLORS[cat] || 'blue'} />
             ))}
@@ -258,38 +212,40 @@ export default function Dashboard() {
         )}
 
         {/* UDHAR */}
-        {(l.pendingUdhar > 0 || l.pendingAdvance > 0) && (
+        {!loading && (s.pendingUdhar > 0 || s.pendingAdvance > 0) && (
           <div className="card grid grid-cols-2 gap-3">
             <div>
               <p className="text-xs text-text-muted">Pending Udhar</p>
-              <p className="text-xl font-bold text-accent-red mt-1">₹{l.pendingUdhar.toLocaleString('en-IN')}</p>
+              <p className="text-xl font-bold text-accent-red mt-1">₹{s.pendingUdhar.toLocaleString('en-IN')}</p>
             </div>
             <div>
               <p className="text-xs text-text-muted">Advance Held</p>
-              <p className="text-xl font-bold text-accent-green mt-1">₹{l.pendingAdvance.toLocaleString('en-IN')}</p>
+              <p className="text-xl font-bold text-accent-green mt-1">₹{s.pendingAdvance.toLocaleString('en-IN')}</p>
             </div>
           </div>
         )}
 
         {/* ALL TIME */}
-        <div className="card">
-          <p className="text-sm font-semibold text-text-primary mb-3">All Time</p>
-          <div className="grid grid-cols-3 gap-y-4">
-            {[
-              { label: 'Revenue',  value: `₹${totalRev.toLocaleString('en-IN')}` },
-              { label: 'Expenses', value: `₹${totalExp.toLocaleString('en-IN')}` },
-              { label: 'Net P&L',  value: `₹${Math.abs(totalRev - totalExp).toLocaleString('en-IN')}` },
-            ].map(({ label, value }) => (
-              <div key={label}>
-                <p className="text-[11px] text-text-muted">{label}</p>
-                <p className="text-sm font-bold text-text-primary mt-0.5">{value}</p>
-              </div>
-            ))}
+        {!loading && (
+          <div className="card">
+            <p className="text-sm font-semibold text-text-primary mb-3">All Time</p>
+            <div className="grid grid-cols-3 gap-y-4">
+              {[
+                { label: 'Revenue',  value: `₹${s.totalRev.toLocaleString('en-IN')}` },
+                { label: 'Expenses', value: `₹${s.totalExp.toLocaleString('en-IN')}` },
+                { label: 'Net P&L',  value: `₹${Math.abs(s.totalRev - s.totalExp).toLocaleString('en-IN')}` },
+              ].map(({ label, value }) => (
+                <div key={label}>
+                  <p className="text-[11px] text-text-muted">{label}</p>
+                  <p className="text-sm font-bold text-text-primary mt-0.5">{value}</p>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Empty state */}
-        {totalRev === 0 && monthExpenses === 0 && !fetching && (
+        {!loading && s.totalRev === 0 && s.totalExp === 0 && (
           <div className="card flex flex-col items-center py-10 gap-3 text-center">
             <Gamepad2 size={36} className="text-text-muted" />
             <p className="text-text-secondary text-sm">No data yet — start a session or add an entry.</p>

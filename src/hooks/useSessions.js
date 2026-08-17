@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { STATIONS, PRICING } from '../config'
 import { loadSessions, saveSession, clearSession } from '../services/storage'
 import { playHourlyChime, showHourlyNotification } from '../services/audio'
-import { getActiveSessions, saveActiveSessions } from '../services/sheetsApi'
+import { subscribeActiveSessions, pushActiveSessions, subscribeServerOffset } from '../services/firebaseDb'
 
 function calcPrice(elapsedSecs, players) {
   const hours = elapsedSecs / 3600
@@ -33,11 +33,8 @@ export function useSessions() {
   const [sessions, setSessions] = useState(initialState)
   const tickRef = useRef(null)
   const syncTimeoutRef = useRef(null)
-  // Offset between server clock and local clock: serverTime - Date.now()
-  // Kept in a ref so getElapsed always reads the latest value without re-creating the callback
   const clockOffsetRef = useRef(0)
 
-  // "Server now" — local clock corrected by the last known offset
   const serverNow = useCallback(() => Date.now() + clockOffsetRef.current, [])
 
   const getElapsed = useCallback((session) => {
@@ -45,7 +42,6 @@ export function useSessions() {
     return session.accumulatedSecs + Math.floor((serverNow() - session.startTime) / 1000)
   }, [serverNow])
 
-  // Push current session state to Apps Script for cross-device sync
   const pushToCloud = useCallback((state) => {
     clearTimeout(syncTimeoutRef.current)
     syncTimeoutRef.current = setTimeout(() => {
@@ -60,34 +56,30 @@ export function useSessions() {
           lastHourNotified: s.lastHourNotified,
         }
       })
-      saveActiveSessions(toSync).catch(() => {})
-    }, 300) // debounce rapid changes
+      pushActiveSessions(toSync).catch(() => {})
+    }, 300)
   }, [])
 
-  // Fetch cloud state and merge into local — runs on mount and on visibility restore
-  const syncFromCloud = useCallback(() => {
-    getActiveSessions().then(res => {
-      if (!res.ok || !res.data?.sessions) return
-      // Sync clock offset so all devices use the same reference clock
-      if (res.data.serverTime) {
-        clockOffsetRef.current = res.data.serverTime - Date.now()
-      }
-      const cloud = res.data.sessions
+  // Firebase: server clock offset + real-time active session sync
+  useEffect(() => {
+    const unsubOffset = subscribeServerOffset(offset => {
+      clockOffsetRef.current = offset
+    })
+
+    const unsubSessions = subscribeActiveSessions(cloud => {
       setSessions(prev => {
         let changed = false
         const next = { ...prev }
         Object.values(cloud).forEach(cs => {
           const local = prev[cs.id]
           if (!local) return
-          // Cloud says running but local says idle → another device started it
           if (cs.isRunning && !local.isRunning) {
             next[cs.id] = { ...local, isRunning: true, startTime: cs.startTime, accumulatedSecs: cs.accumulatedSecs, players: cs.players }
             saveSession(cs.id, next[cs.id])
             changed = true
           }
-          // Cloud says stopped but local says running → another device stopped it
           if (!cs.isRunning && local.isRunning) {
-            const elapsed = local.accumulatedSecs + Math.floor((Date.now() - local.startTime) / 1000)
+            const elapsed = local.accumulatedSecs + Math.floor((Date.now() + clockOffsetRef.current - local.startTime) / 1000)
             next[cs.id] = { ...local, isRunning: false, startTime: null, accumulatedSecs: elapsed }
             saveSession(cs.id, next[cs.id])
             changed = true
@@ -95,22 +87,16 @@ export function useSessions() {
         })
         return changed ? next : prev
       })
-    }).catch(() => {})
+    })
+
+    return () => {
+      unsubOffset()
+      unsubSessions()
+      clearTimeout(syncTimeoutRef.current)
+    }
   }, [])
 
-  useEffect(() => {
-    syncFromCloud()
-    const onVisible = () => { if (document.visibilityState === 'visible') syncFromCloud() }
-    document.addEventListener('visibilitychange', onVisible)
-    // Poll every 10s so a stop/start on another device is reflected within 10s
-    const pollId = setInterval(syncFromCloud, 10000)
-    return () => {
-      document.removeEventListener('visibilitychange', onVisible)
-      clearInterval(pollId)
-    }
-  }, [syncFromCloud])
-
-  // Tick every second to update elapsed time
+  // Tick every second to update elapsed display + hourly alerts
   useEffect(() => {
     tickRef.current = setInterval(() => {
       setSessions(prev => {
@@ -131,8 +117,6 @@ export function useSessions() {
           }
         })
 
-        // Always return a new object when a session is running so React re-renders
-        // and sessionList recalculates elapsed from fresh Date.now()
         return anyRunning ? { ...next } : prev
       })
     }, 1000)

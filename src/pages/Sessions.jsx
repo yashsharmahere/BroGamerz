@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, memo } from 'react'
-import { Play, Square, Plus, Minus, Zap, Pencil, Gamepad2, RefreshCw } from 'lucide-react'
+import { Play, Square, Plus, Minus, Zap, Pencil, Gamepad2, Wifi, WifiOff } from 'lucide-react'
 import { useSessions } from '../hooks/useSessions'
 import EndSessionModal from '../components/EndSessionModal'
 import EditSessionModal from '../components/EditSessionModal'
@@ -7,7 +7,8 @@ import { useToast } from '../components/Toast'
 import {
   appendRevenue, loadRevenueLog, updateRevenue, deleteRevenue, getDayStationTotal
 } from '../services/storage'
-import { logSession, updateDayRevenue, getSessions, updateSessionInSheet, deleteSessionFromSheet } from '../services/sheetsApi'
+import { logSession, updateDayRevenue, updateSessionInSheet, deleteSessionFromSheet } from '../services/sheetsApi'
+import { writeSession, updateSessionFb, deleteSessionFb, subscribeSessions, subscribeConnected } from '../services/firebaseDb'
 import { playConfirmBeep, requestNotificationPermission } from '../services/audio'
 
 function formatTime(secs) {
@@ -31,7 +32,6 @@ function formatTimeOfDay(isoString) {
   return new Date(isoString).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
 }
 
-// ─── Station Colors ────────────────────────────────────────────────────────────
 const COLOR = {
   blue:   { ring: 'ring-accent-blue', glow: 'shadow-accent-blue/30', amount: 'text-accent-blue', dot: 'bg-accent-blue' },
   purple: { ring: 'ring-accent-purple', glow: 'shadow-accent-purple/30', amount: 'text-accent-purple', dot: 'bg-accent-purple' },
@@ -105,17 +105,13 @@ const LogEntry = memo(function LogEntry({ entry, onEdit }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <p className={`text-sm font-semibold ${color}`}>{entry.station || `Station ${entry.stationIndex}`}</p>
-          {entry.fromSheet && <span className="text-[10px] text-text-muted bg-bg-secondary px-1.5 py-0.5 rounded-full">Sheet</span>}
+          {entry.fromCloud && <span className="text-[10px] text-text-muted bg-bg-secondary px-1.5 py-0.5 rounded-full">cloud</span>}
           {entry.editedAt && <span className="text-[10px] text-text-muted bg-bg-secondary px-1.5 py-0.5 rounded-full">edited</span>}
         </div>
         <p className="text-xs text-text-muted mt-0.5">
-          {entry.fromSheet ? 'Entered directly in Google Sheet' : (
-            <>
-              {formatMins(entry.durationMins)}
-              {entry.players ? ` · ${entry.players} ${entry.players === 1 ? 'player' : 'players'}` : ''}
-              {entry.savedAt ? ` · ${formatTimeOfDay(entry.savedAt)}` : ''}
-            </>
-          )}
+          {formatMins(entry.durationMins)}
+          {entry.players ? ` · ${entry.players} ${entry.players === 1 ? 'player' : 'players'}` : ''}
+          {entry.savedAt ? ` · ${formatTimeOfDay(entry.savedAt)}` : ''}
         </p>
         {entry.notes ? <p className="text-xs text-text-muted italic mt-0.5 truncate">{entry.notes}</p> : null}
       </div>
@@ -133,17 +129,22 @@ const LogEntry = memo(function LogEntry({ entry, onEdit }) {
 })
 
 // ─── Session History ───────────────────────────────────────────────────────────
-const SessionHistory = memo(function SessionHistory({ log, onEdit, onRefreshSheet, sheetSyncing, sheetSynced }) {
+const SessionHistory = memo(function SessionHistory({ log, onEdit, isLive }) {
   const [showAll, setShowAll] = useState(false)
+
+  const liveIndicator = (
+    <div className="flex items-center gap-1.5 text-xs">
+      {isLive
+        ? <><span className="w-1.5 h-1.5 rounded-full bg-accent-green animate-pulse" /><span className="text-accent-green">Live</span></>
+        : <><WifiOff size={11} className="text-text-muted" /><span className="text-text-muted">Offline</span></>
+      }
+    </div>
+  )
 
   const header = (
     <div className="flex items-center justify-between px-0.5">
       <p className="text-[11px] font-semibold text-text-muted uppercase tracking-widest">Session Log</p>
-      <button onClick={onRefreshSheet} disabled={sheetSyncing}
-        className="flex items-center gap-1 text-xs text-text-muted disabled:opacity-50">
-        <RefreshCw size={11} className={sheetSyncing ? 'animate-spin' : ''} />
-        {sheetSyncing ? 'Syncing…' : sheetSynced ? 'Synced' : 'Sync Sheet'}
-      </button>
+      {liveIndicator}
     </div>
   )
 
@@ -158,7 +159,6 @@ const SessionHistory = memo(function SessionHistory({ log, onEdit, onRefreshShee
     </div>
   )
 
-  // Group by date
   const groups = []
   const seen = {}
   log.forEach(e => {
@@ -188,18 +188,13 @@ const SessionHistory = memo(function SessionHistory({ log, onEdit, onRefreshShee
             </button>
           )}
         </div>
-        <button onClick={onRefreshSheet} disabled={sheetSyncing}
-          className="flex items-center gap-1 text-xs text-text-muted disabled:opacity-50">
-          <RefreshCw size={11} className={sheetSyncing ? 'animate-spin' : ''} />
-          {sheetSyncing ? 'Syncing…' : sheetSynced ? 'Synced' : 'Sync Sheet'}
-        </button>
+        {liveIndicator}
       </div>
 
       {visible.map(({ date, entries }) => {
         const dayTotal = entries.reduce((s, e) => s + e.amount, 0)
         return (
           <div key={date} className="card p-0 overflow-hidden">
-            {/* Day header */}
             <div className="flex items-center justify-between px-4 py-2.5 bg-bg-secondary border-b border-border">
               <p className="text-xs font-semibold text-text-secondary">{dateLabel(date)}</p>
               <p className="text-xs font-bold text-text-primary">₹{dayTotal.toLocaleString('en-IN')}</p>
@@ -215,50 +210,23 @@ const SessionHistory = memo(function SessionHistory({ log, onEdit, onRefreshShee
 })
 
 // ─── Main Page ─────────────────────────────────────────────────────────────────
-const SESSION_LOG_CACHE = 'bg_sessions_log_cache'
-function getSessionCache() {
-  try { return JSON.parse(sessionStorage.getItem(SESSION_LOG_CACHE) || 'null') } catch { return null }
-}
-function setSessionCache(data) {
-  try { sessionStorage.setItem(SESSION_LOG_CACHE, JSON.stringify(data)) } catch {}
-}
-
 export default function Sessions() {
   const { sessions, startSession, stopSession, setPlayers, resetSession } = useSessions()
   const [endingSession, setEndingSession] = useState(null)
   const [editingEntry, setEditingEntry] = useState(null)
   const [log, setLog] = useState(() => loadRevenueLog())
-  const [sheetSessions, setSheetSessions] = useState(() => getSessionCache() ?? [])
-  const [sheetSyncing, setSheetSyncing] = useState(false)
-  const [sheetSynced, setSheetSynced] = useState(() => getSessionCache() !== null)
+  const [firebaseSessions, setFirebaseSessions] = useState([])
+  const [isLive, setIsLive] = useState(false)
   const toast = useToast()
 
   useEffect(() => { requestNotificationPermission() }, [])
 
-  const fetchSheetSessions = useCallback(async (silent = false) => {
-    if (!silent) setSheetSyncing(true)
-    const month = new Date().toLocaleDateString('en-CA').slice(0, 7)
-    try {
-      const res = await getSessions(month)
-      if (res.ok && res.data?.sessions) {
-        setSheetSessions(res.data.sessions)
-        setSessionCache(res.data.sessions)
-        setSheetSynced(true)
-      }
-    } catch {}
-    if (!silent) setSheetSyncing(false)
-  }, [])
-
+  // Firebase real-time listeners
   useEffect(() => {
-    fetchSheetSessions()
-    const onVisible = () => { if (document.visibilityState === 'visible') fetchSheetSessions(true) }
-    document.addEventListener('visibilitychange', onVisible)
-    const pollId = setInterval(() => fetchSheetSessions(true), 15000)
-    return () => {
-      document.removeEventListener('visibilitychange', onVisible)
-      clearInterval(pollId)
-    }
-  }, [fetchSheetSessions])
+    const unsubSessions = subscribeSessions(data => setFirebaseSessions(data))
+    const unsubConnected = subscribeConnected(connected => setIsLive(connected))
+    return () => { unsubSessions(); unsubConnected() }
+  }, [])
 
   const refreshLog = useCallback(() => setLog(loadRevenueLog()), [])
   const handleEditEntry = useCallback((entry) => setEditingEntry(entry), [])
@@ -267,7 +235,6 @@ export default function Sessions() {
   const handleStop = (stationId) => {
     const session = sessions.find(s => s.id === stationId)
     if (!session || session.elapsed < 10) { resetSession(stationId); return }
-    // Keep session running while modal is open — no stale timer state
     setEndingSession({ id: stationId })
   }
 
@@ -278,11 +245,13 @@ export default function Sessions() {
     const stationIndex = stationId === 'ps5_1' ? 1 : 2
     const entry = { date, station: session.name, stationIndex, amount, players, durationMins, notes }
 
-    const saved = appendRevenue(entry)  // returns entry with generated id
+    const saved = appendRevenue(entry)
     refreshLog()
     playConfirmBeep()
     toast(`Session saved · ₹${amount.toLocaleString('en-IN')}`, 'success')
-    logSession({ ...saved }).catch(() => {})  // includes id so Sessions sheet can track it
+    // Write to Firebase (real-time) + Sheets (backup)
+    writeSession(saved).catch(() => {})
+    logSession({ ...saved }).catch(() => {})
     stopSession(stationId)
     resetSession(stationId)
     setEndingSession(null)
@@ -292,17 +261,15 @@ export default function Sessions() {
   const handleSaveEdit = async (updated) => {
     updateRevenue(updated.id, updated)
     refreshLog()
-    // Update the shared Sessions sheet so other devices see the change
+    // Firebase (real-time) + Sheets (backup)
+    updateSessionFb(updated.id, updated).catch(() => {})
     updateSessionInSheet(updated).catch(() => {})
-    // Keep Daily Revenue totals in sync
     const newTotal = getDayStationTotal(updated.date, updated.stationIndex)
     updateDayRevenue({ date: updated.date, stationIndex: updated.stationIndex, newTotal }).catch(() => {})
     if (updated.stationIndex !== editingEntry.stationIndex || updated.date !== editingEntry.date) {
       const origTotal = getDayStationTotal(editingEntry.date, editingEntry.stationIndex)
       updateDayRevenue({ date: editingEntry.date, stationIndex: editingEntry.stationIndex, newTotal: origTotal }).catch(() => {})
     }
-    // Refresh sheet sessions so the edit is visible immediately without a full reload
-    setSheetSessions(prev => prev.map(s => String(s.id) === String(updated.id) ? { ...s, ...updated } : s))
     toast('Session updated', 'success')
     setEditingEntry(null)
   }
@@ -311,26 +278,25 @@ export default function Sessions() {
     const entry = editingEntry
     deleteRevenue(id)
     refreshLog()
+    // Firebase (real-time) + Sheets (backup)
+    deleteSessionFb(id).catch(() => {})
     deleteSessionFromSheet(id).catch(() => {})
     const newTotal = getDayStationTotal(entry.date, entry.stationIndex)
     updateDayRevenue({ date: entry.date, stationIndex: entry.stationIndex, newTotal }).catch(() => {})
-    setSheetSessions(prev => prev.filter(s => String(s.id) !== String(id)))
     toast('Session deleted', 'success')
     setEditingEntry(null)
   }
 
-  // Merge local log + sheet sessions by ID — sheet entries fill in sessions from other devices
+  // Merge local log + Firebase sessions by ID (Firebase fills in cross-device entries)
   const mergedLog = useMemo(() => {
     const byId = {}
-    // Local entries first (instant, offline-capable)
     log.forEach(e => { byId[String(e.id)] = e })
-    // Sheet entries: add ones missing locally, and mark them as fromSheet so edit works via Sheet API
-    sheetSessions.forEach(s => {
+    firebaseSessions.forEach(s => {
       const key = String(s.id)
-      if (!byId[key]) byId[key] = { ...s, fromSheet: true }
+      if (!byId[key]) byId[key] = { ...s, fromCloud: true }
     })
     return Object.values(byId).sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-  }, [log, sheetSessions])
+  }, [log, firebaseSessions])
 
   const totalActive = sessions.filter(s => s.isRunning).length
   const totalRevenue = sessions.reduce((sum, s) => sum + (s.isRunning ? s.currentCharge : 0), 0)
@@ -338,7 +304,6 @@ export default function Sessions() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
       <div className="px-4 pt-4 pb-3 flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-text-primary">Bro Gamerz</h1>
@@ -354,15 +319,12 @@ export default function Sessions() {
         )}
       </div>
 
-      {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-4">
-        {/* Station Cards */}
         {sessions.map(session => (
           <SessionCard key={session.id} session={session}
             onStart={startSession} onStop={handleStop} onSetPlayers={setPlayers} />
         ))}
 
-        {/* Pricing note */}
         <div className="card flex-row items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-accent-blue/10 flex items-center justify-center shrink-0">
             <span className="text-accent-blue text-xs font-bold">₹</span>
@@ -373,12 +335,9 @@ export default function Sessions() {
           </p>
         </div>
 
-        {/* Session Log */}
-        <SessionHistory log={mergedLog} onEdit={handleEditEntry}
-          onRefreshSheet={fetchSheetSessions} sheetSyncing={sheetSyncing} sheetSynced={sheetSynced} />
+        <SessionHistory log={mergedLog} onEdit={handleEditEntry} isLive={isLive} />
       </div>
 
-      {/* Modals */}
       {liveEndingSession && (
         <EndSessionModal
           session={liveEndingSession}

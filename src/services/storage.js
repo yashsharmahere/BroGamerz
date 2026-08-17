@@ -75,8 +75,10 @@ export function loadExpenseLog() {
 
 export function appendExpense(entry) {
   const log = loadExpenseLog()
-  log.unshift({ ...entry, id: Date.now(), savedAt: new Date().toISOString() })
+  const saved = { ...entry, id: Date.now(), savedAt: new Date().toISOString() }
+  log.unshift(saved)
   save(KEYS.expenses, log.slice(0, 500))
+  return saved
 }
 
 // ─── Udhar Log ───────────────────────────────────────────────────────────────
@@ -86,8 +88,10 @@ export function loadUdharLog() {
 
 export function appendUdhar(entry) {
   const log = loadUdharLog()
-  log.unshift({ ...entry, id: Date.now(), savedAt: new Date().toISOString() })
+  const saved = { ...entry, id: Date.now(), savedAt: new Date().toISOString() }
+  log.unshift(saved)
   save(KEYS.udhar, log)
+  return saved
 }
 
 export function updateUdhar(id, updates) {
