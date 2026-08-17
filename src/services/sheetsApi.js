@@ -22,7 +22,7 @@ async function getFromScript(params) {
   if (!isConfigured()) return { ok: false, reason: 'not_configured' }
   try {
     const url = new URL(APPS_SCRIPT_URL)
-    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
+    Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null) url.searchParams.set(k, v) })
     url.searchParams.set('_t', Date.now()) // bust cache
     const res = await fetch(url.toString(), { cache: 'no-store' })
     const data = await res.json()
