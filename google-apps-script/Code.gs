@@ -46,6 +46,7 @@ function doGet(e) {
       case 'getDailyRevenue':    result = getDailyRevenue(e.parameter.month);  break
       case 'getActiveSessions':  result = getActiveSessions();                  break
       case 'getSessions':        result = getSessions(e.parameter.month);       break
+      case 'getExpenses':        result = getExpensesList();                     break
       default:                result = { error: 'Unknown action' }
     }
 
@@ -378,6 +379,29 @@ function saveActiveSessions({ sessions }) {
 function getActiveSessions() {
   const raw = PropertiesService.getScriptProperties().getProperty('activeSessions')
   return { sessions: raw ? JSON.parse(raw) : null, serverTime: Date.now() }
+}
+
+// ─── Get All Expenses ─────────────────────────────────────────────────────────
+function getExpensesList() {
+  const sheet = ss.getSheetByName('Expenses')
+  if (!sheet) return { expenses: [] }
+
+  const data = sheet.getDataRange().getValues().slice(1)
+  const expenses = data
+    .filter(r => r[0])
+    .map((r, i) => ({
+      rowIndex: i + 2,
+      date: typeof r[0] === 'string' ? r[0] : Utilities.formatDate(new Date(r[0]), 'Asia/Kolkata', 'yyyy-MM-dd'),
+      paidBy: r[1] || '',
+      category: r[2] || 'Miscellaneous',
+      description: r[3] || '',
+      amount: Number(r[4]) || 0,
+      paymentMethod: r[5] || 'Cash',
+      recurring: r[6] || 'One-time',
+      notes: r[7] || '',
+    }))
+
+  return { expenses }
 }
 
 // ─── Get Daily Revenue ────────────────────────────────────────────────────────

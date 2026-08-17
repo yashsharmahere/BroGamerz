@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo } from 'react'
-import { TrendingUp, TrendingDown, Users, Gamepad2, IndianRupee } from 'lucide-react'
+import { TrendingUp, TrendingDown, Users, Gamepad2, IndianRupee, Upload } from 'lucide-react'
 import { subscribeSessions, subscribeExpenses, subscribeUdhar, subscribeConnected } from '../services/firebaseDb'
+import { migrateFromSheets } from '../services/migration'
+import { useToast } from '../components/Toast'
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
 function StatCard({ label, value, sub, icon: Icon, color = 'blue' }) {
@@ -66,6 +68,9 @@ export default function Dashboard() {
   const [expenses,  setExpenses]  = useState(null)
   const [udhar,     setUdhar]     = useState(null)
   const [isLive,    setIsLive]    = useState(false)
+  const [migrating, setMigrating] = useState(false)
+  const [migrateMsg, setMigrateMsg] = useState('')
+  const toast = useToast()
 
   useEffect(() => {
     const unsubS = subscribeSessions(data  => setSessions(data))
@@ -119,6 +124,25 @@ export default function Dashboard() {
     }
   }, [sessions, expenses, udhar])
 
+  const handleMigrate = async () => {
+    setMigrating(true)
+    setMigrateMsg('Starting migration…')
+    try {
+      const result = await migrateFromSheets(msg => setMigrateMsg(msg))
+      const total = result.sessions + result.expenses + result.udhar
+      if (result.errors.length > 0) {
+        toast(`Imported ${total} entries. Some errors: ${result.errors[0]}`, 'warning')
+      } else {
+        toast(`Done! Imported ${result.sessions} sessions, ${result.expenses} expenses, ${result.udhar} udhar entries.`, 'success')
+      }
+    } catch (e) {
+      toast('Migration failed: ' + e.message, 'error')
+    } finally {
+      setMigrating(false)
+      setMigrateMsg('')
+    }
+  }
+
   const loading = !stats
   const s = stats ?? {}
   const sortedCats = Object.entries(s.categoryTotals ?? {}).sort((a, b) => b[1] - a[1])
@@ -137,6 +161,15 @@ export default function Dashboard() {
             }
           </div>
         </div>
+        <button
+          onClick={handleMigrate}
+          disabled={migrating}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-border text-xs text-text-secondary active:scale-95 transition-all disabled:opacity-50"
+          title="Import historical data from Google Sheets into Firebase"
+        >
+          <Upload size={13} />
+          {migrating ? migrateMsg : 'Import Sheets'}
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-5">

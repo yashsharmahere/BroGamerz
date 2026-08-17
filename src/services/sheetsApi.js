@@ -117,6 +117,10 @@ export async function getSessions(month) {
   return getFromScript({ action: 'getSessions', month })
 }
 
+export async function getExpenses() {
+  return getFromScript({ action: 'getExpenses' })
+}
+
 export async function updateSessionInSheet(entry) {
   return callScript({ action: 'updateSession', ...entry })
 }
