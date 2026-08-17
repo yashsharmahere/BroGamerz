@@ -464,12 +464,10 @@ function syncDailyRevenueRow(sheet, row) {
   const ps5_1 = Number(r[1]) || 0
   const ps5_2 = Number(r[2]) || 0
   const other  = Number(r[3]) || 0
-  if (ps5_1 > 0) firebasePut('/sessions/' + (base+1), { id: base+1, date: dateStr, station: 'PS5 Station 1', stationIndex: 1, amount: ps5_1, players: customers, durationMins: 0, notes, savedAt })
-  else firebaseDelete('/sessions/' + (base+1))
-  if (ps5_2 > 0) firebasePut('/sessions/' + (base+2), { id: base+2, date: dateStr, station: 'PS5 Station 2', stationIndex: 2, amount: ps5_2, players: customers, durationMins: 0, notes, savedAt })
-  else firebaseDelete('/sessions/' + (base+2))
-  if (other > 0) firebasePut('/sessions/' + (base+3), { id: base+3, date: dateStr, station: 'Other', stationIndex: 0, amount: other, players: 0, durationMins: 0, notes, savedAt })
-  else firebaseDelete('/sessions/' + (base+3))
+  // Always PUT all three — amount:0 entries are filtered on the client (amount > 0)
+  firebasePut('/sessions/' + (base+1), { id: base+1, date: dateStr, station: 'PS5 Station 1', stationIndex: 1, amount: ps5_1, players: customers, durationMins: 0, notes, savedAt })
+  firebasePut('/sessions/' + (base+2), { id: base+2, date: dateStr, station: 'PS5 Station 2', stationIndex: 2, amount: ps5_2, players: customers, durationMins: 0, notes, savedAt })
+  firebasePut('/sessions/' + (base+3), { id: base+3, date: dateStr, station: 'Other', stationIndex: 0, amount: other, players: 0, durationMins: 0, notes, savedAt })
 }
 
 function syncSessionRow(sheet, row) {
