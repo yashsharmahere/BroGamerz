@@ -427,7 +427,9 @@ function firebasePut(path, data) {
 
 function firebaseDelete(path) {
   UrlFetchApp.fetch(FIREBASE_URL + path + '.json', {
-    method: 'DELETE',
+    method: 'PUT',
+    contentType: 'application/json',
+    payload: 'null',
     muteHttpExceptions: true,
   })
 }

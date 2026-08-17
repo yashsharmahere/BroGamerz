@@ -25,7 +25,7 @@ export const pushActiveSessions = (sessions) =>
 export const subscribeSessions = (cb) =>
   onValue(R('sessions'), snap => {
     const val = snap.val() ?? {}
-    cb(Object.values(val).sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '')))
+    cb(Object.values(val).filter(s => s && (s.amount || 0) > 0).sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '')))
   })
 
 export const writeSession = (entry) => set(R(`sessions/${entry.id}`), entry)
