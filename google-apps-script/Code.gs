@@ -29,6 +29,13 @@ function doPost(e) {
       default:                 result = { error: 'Unknown action' }
     }
 
+    // Installable onEdit triggers DON'T fire for programmatic (API) edits, so the
+    // app writing to the sheet via doPost would never rebuild Firebase. Rebuild
+    // here for any action that changes the session log.
+    if (['logSession', 'logManualRevenue', 'updateDayRevenue', 'updateSession', 'deleteSession'].indexOf(payload.action) !== -1) {
+      try { rebuildSessions() } catch (e) { Logger.log('rebuild after ' + payload.action + ': ' + e.message) }
+    }
+
     return jsonResponse(result)
   } catch (err) {
     return jsonResponse({ error: err.message })
