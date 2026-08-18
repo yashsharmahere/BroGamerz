@@ -93,7 +93,40 @@ function findRowByDate(sheet, dateStr) {
   return -1
 }
 
-// ─── Log Session → Daily Revenue tab + Sessions tab ──────────────────────────
+// Recompute the Daily Revenue station cells (B/C/D) for a date from the Sessions
+// tab, so the sheet's daily total always equals the sum of the individual
+// sessions. Only overwrites a station's cell if that station HAS session rows
+// for the date — days with a manually typed total (no sessions) are left alone.
+function syncDailyRevenueForDate(dateStr) {
+  const drSheet = ss.getSheetByName('Daily Revenue')
+  const sessSheet = ss.getSheetByName('Sessions')
+  if (!drSheet || !sessSheet) return
+
+  const sums = { 1: 0, 2: 0, 0: 0 }
+  const has = { 1: false, 2: false, 0: false }
+  const sd = sessSheet.getDataRange().getValues()
+  for (let i = 1; i < sd.length; i++) {
+    const r = sd[i]
+    if (!r[0] || !r[1]) continue
+    const d = typeof r[1] === 'string' ? r[1] : Utilities.formatDate(new Date(r[1]), 'Asia/Kolkata', 'yyyy-MM-dd')
+    if (d !== dateStr) continue
+    const si = Number(r[3])
+    if (si !== 1 && si !== 2 && si !== 0) continue
+    sums[si] += Number(r[4]) || 0
+    has[si] = true
+  }
+
+  let rowNum = findRowByDate(drSheet, dateStr)
+  if (rowNum === -1) {
+    drSheet.appendRow([dateStr, '', '', '', '', '', ''])
+    rowNum = drSheet.getLastRow()
+  }
+  if (has[1]) drSheet.getRange(rowNum, 2).setValue(sums[1]) // Station 1 → col B
+  if (has[2]) drSheet.getRange(rowNum, 3).setValue(sums[2]) // Station 2 → col C
+  if (has[0]) drSheet.getRange(rowNum, 4).setValue(sums[0]) // Other     → col D
+}
+
+// ─── Log Session → Sessions tab, then sync Daily Revenue from the sessions ────
 function logSession({ id, date, stationIndex, amount, players, durationMins, notes, station, savedAt }) {
   const sheet = ss.getSheetByName('Daily Revenue')
   if (!sheet) throw new Error('Daily Revenue sheet not found')
@@ -105,37 +138,19 @@ function logSession({ id, date, stationIndex, amount, players, durationMins, not
   const stationName = station || (stationIndex === 1 ? 'PS5 Station 1' : stationIndex === 2 ? 'PS5 Station 2' : 'Other')
   sessSheet.appendRow([String(id || ''), date, stationName, stationIndex, amount, players || 1, durationMins || 0, notes || '', savedAt || date, ''])
 
-  const rowNum = findRowByDate(sheet, date)
-
-  if (rowNum === -1) {
-    // Append a new row for this date
-    const newRow = [date, '', '', '', '', '', '']
-    if (stationIndex === 1) newRow[1] = amount
-    else if (stationIndex === 2) newRow[2] = amount
-    newRow[5] = players
-    newRow[6] = notes || ''
-    sheet.appendRow(newRow)
-  } else {
-    // Add to the existing row's station column
-    const col = stationIndex === 1 ? 2 : 3 // B or C
-    const existing = sheet.getRange(rowNum, col).getValue() || 0
-    sheet.getRange(rowNum, col).setValue(existing + amount)
-
-    // Add players to customer count
-    const custCol = 6
-    const existingCust = sheet.getRange(rowNum, custCol).getValue() || 0
-    sheet.getRange(rowNum, custCol).setValue(existingCust + players)
-
-    // Append to notes
-    if (notes) {
-      const notesCol = 7
-      const existingNotes = sheet.getRange(rowNum, notesCol).getValue() || ''
-      sheet.getRange(rowNum, notesCol).setValue(
-        existingNotes ? `${existingNotes}; ${notes}` : notes
-      )
-    }
+  // Customers + notes accumulate on the Daily Revenue row
+  let rowNum = findRowByDate(sheet, date)
+  if (rowNum === -1) { sheet.appendRow([date, '', '', '', '', '', '']); rowNum = sheet.getLastRow() }
+  const existingCust = sheet.getRange(rowNum, 6).getValue() || 0
+  sheet.getRange(rowNum, 6).setValue(existingCust + (players || 1))
+  if (notes) {
+    const existingNotes = sheet.getRange(rowNum, 7).getValue() || ''
+    sheet.getRange(rowNum, 7).setValue(existingNotes ? `${existingNotes}; ${notes}` : notes)
   }
 
+  // Revenue cells are always recomputed from the Sessions tab → sheet total
+  // always matches the sessions.
+  syncDailyRevenueForDate(date)
   return { success: true }
 }
 
@@ -153,25 +168,20 @@ function logManualRevenue({ id, date, otherRevenue, customers, notes }) {
     sessSheet.appendRow([String(id || ''), date, 'Other', 0, otherRevenue, customers || 0, 0, notes || '', new Date().toISOString(), ''])
   }
 
-  const rowNum = findRowByDate(sheet, date)
-
-  if (rowNum === -1) {
-    sheet.appendRow([date, '', '', otherRevenue || '', '', customers || '', notes || ''])
-  } else {
-    if (otherRevenue) {
-      const existing = sheet.getRange(rowNum, 4).getValue() || 0
-      sheet.getRange(rowNum, 4).setValue(existing + otherRevenue)
-    }
-    if (customers) {
-      const existing = sheet.getRange(rowNum, 6).getValue() || 0
-      sheet.getRange(rowNum, 6).setValue(existing + customers)
-    }
-    if (notes) {
-      const existing = sheet.getRange(rowNum, 7).getValue() || ''
-      sheet.getRange(rowNum, 7).setValue(existing ? `${existing}; ${notes}` : notes)
-    }
+  // Customers + notes accumulate on the Daily Revenue row
+  let rowNum = findRowByDate(sheet, date)
+  if (rowNum === -1) { sheet.appendRow([date, '', '', '', '', '', '']); rowNum = sheet.getLastRow() }
+  if (customers) {
+    const existing = sheet.getRange(rowNum, 6).getValue() || 0
+    sheet.getRange(rowNum, 6).setValue(existing + customers)
+  }
+  if (notes) {
+    const existing = sheet.getRange(rowNum, 7).getValue() || ''
+    sheet.getRange(rowNum, 7).setValue(existing ? `${existing}; ${notes}` : notes)
   }
 
+  // Revenue cells are always recomputed from the Sessions tab
+  syncDailyRevenueForDate(date)
   return { success: true }
 }
 
@@ -356,6 +366,9 @@ function updateSession({ id, date, station, stationIndex, amount, players, durat
   const sid = String(id)
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][0]) === sid) {
+      // Remember the row's old date so we can resync it too if the date changed.
+      const oldRaw = data[i][1]
+      const oldDate = typeof oldRaw === 'string' ? oldRaw : Utilities.formatDate(new Date(oldRaw), 'Asia/Kolkata', 'yyyy-MM-dd')
       const editedAt = Utilities.formatDate(new Date(), 'Asia/Kolkata', 'yyyy-MM-dd HH:mm')
       sheet.getRange(i + 1, 2).setValue(date)
       sheet.getRange(i + 1, 3).setValue(station)
@@ -365,6 +378,8 @@ function updateSession({ id, date, station, stationIndex, amount, players, durat
       sheet.getRange(i + 1, 7).setValue(durationMins || 0)
       sheet.getRange(i + 1, 8).setValue(notes || '')
       sheet.getRange(i + 1, 10).setValue(editedAt)
+      syncDailyRevenueForDate(date)
+      if (oldDate && oldDate !== date) syncDailyRevenueForDate(oldDate)
       return { success: true }
     }
   }
@@ -379,7 +394,10 @@ function deleteSession({ id }) {
   const sid = String(id)
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][0]) === sid) {
+      const raw = data[i][1]
+      const dateStr = typeof raw === 'string' ? raw : Utilities.formatDate(new Date(raw), 'Asia/Kolkata', 'yyyy-MM-dd')
       sheet.deleteRow(i + 1)
+      syncDailyRevenueForDate(dateStr) // recompute the day's total from remaining sessions
       return { success: true }
     }
   }

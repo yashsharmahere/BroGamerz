@@ -5,9 +5,9 @@ import EndSessionModal from '../components/EndSessionModal'
 import EditSessionModal from '../components/EditSessionModal'
 import { useToast } from '../components/Toast'
 import {
-  appendRevenue, loadRevenueLog, updateRevenue, deleteRevenue, getDayStationTotal
+  appendRevenue, loadRevenueLog, updateRevenue, deleteRevenue
 } from '../services/storage'
-import { logSession, updateDayRevenue, updateSessionInSheet, deleteSessionFromSheet } from '../services/sheetsApi'
+import { logSession, updateSessionInSheet, deleteSessionFromSheet } from '../services/sheetsApi'
 import { subscribeSessions, subscribeConnected } from '../services/firebaseDb'
 import { playConfirmBeep, requestNotificationPermission } from '../services/audio'
 
@@ -277,20 +277,14 @@ export default function Sessions() {
   const handleSaveEdit = async (updated) => {
     updateRevenue(updated.id, updated)
     refreshLog()
-    // Update the Sheet — its onEdit trigger rebuilds Firebase from the new totals
+    // Update the Sheet — the server recomputes the day's Daily Revenue total from
+    // the Sessions tab (authoritative), so we don't push a local total here.
     updateSessionInSheet(updated).catch(() => {})
-    const newTotal = getDayStationTotal(updated.date, updated.stationIndex)
-    updateDayRevenue({ date: updated.date, stationIndex: updated.stationIndex, newTotal }).catch(() => {})
-    if (updated.stationIndex !== editingEntry.stationIndex || updated.date !== editingEntry.date) {
-      const origTotal = getDayStationTotal(editingEntry.date, editingEntry.stationIndex)
-      updateDayRevenue({ date: editingEntry.date, stationIndex: editingEntry.stationIndex, newTotal: origTotal }).catch(() => {})
-    }
     toast('Session updated', 'success')
     setEditingEntry(null)
   }
 
   const handleDelete = async (id) => {
-    const entry = editingEntry
     deleteRevenue(id)
     refreshLog()
     // Hide it right away (optimistic) — Firebase catches up after the sheet
@@ -299,10 +293,9 @@ export default function Sessions() {
     setTimeout(() => {
       setDeletingIds(prev => { const next = { ...prev }; delete next[String(id)]; return next })
     }, 15000)
-    // Update the Sheet — its onEdit trigger rebuilds Firebase from the new totals
+    // Delete from the Sheet — the server recomputes the day's Daily Revenue total
+    // from the remaining sessions, so we don't push a local total here.
     deleteSessionFromSheet(id).catch(() => {})
-    const newTotal = getDayStationTotal(entry.date, entry.stationIndex)
-    updateDayRevenue({ date: entry.date, stationIndex: entry.stationIndex, newTotal }).catch(() => {})
     toast('Session deleted', 'success')
     setEditingEntry(null)
   }
