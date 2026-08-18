@@ -284,23 +284,23 @@ export default function Sessions() {
     setEditingEntry(null)
   }
 
-  // The Google Sheet (via Firebase) is the source of truth for the log.
-  // Once Firebase has loaded we show ITS data — so edits, adds and deletes made
-  // in the sheet all reflect here, including clearing a cell (which removes the
-  // entry). We only add a local entry on top of Firebase if it was saved in the
-  // last 30s and the sheet hasn't produced its aggregate yet — this gives instant
-  // feedback right after ending a session, without ever resurrecting a deleted one.
+  // The Google Sheet (via Firebase) is the source of truth for the log. Firebase
+  // carries each session by its real id, so we merge by id: show every Firebase
+  // entry (this reflects sheet adds, edits AND deletes), plus any local entry
+  // saved in the last 30s that Firebase hasn't caught up on yet — that gives
+  // instant feedback right after ending a session, without duplicating it once
+  // the sheet round-trips, and without ever resurrecting a deleted entry.
   const mergedLog = useMemo(() => {
     const byDate = (a, b) => (b.date || '').localeCompare(a.date || '')
 
     // Offline or Firebase not ready yet → fall back to the on-device log.
     if (!fbLoaded) return [...log].sort(byDate)
 
-    const covered = new Set(firebaseSessions.map(s => `${s.date}|${s.stationIndex}`))
+    const fbIds = new Set(firebaseSessions.map(s => String(s.id)))
     const now = Date.now()
     const pendingLocal = log.filter(e => {
       const t = e.savedAt ? Date.parse(e.savedAt) : 0
-      return (now - t) < 30000 && !covered.has(`${e.date}|${e.stationIndex}`)
+      return (now - t) < 30000 && !fbIds.has(String(e.id))
     })
     return [...firebaseSessions, ...pendingLocal].sort(byDate)
   }, [log, firebaseSessions, fbLoaded])

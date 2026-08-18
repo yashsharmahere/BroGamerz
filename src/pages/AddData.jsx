@@ -29,7 +29,7 @@ export default function AddData() {
 
     setSaving(true)
     try {
-      appendRevenue({
+      const saved = appendRevenue({
         date: form.date,
         station: 'Other',
         stationIndex: 0,
@@ -39,6 +39,7 @@ export default function AddData() {
       })
       // Log to the Sheet — its onEdit trigger is the single writer to Firebase
       logManualRevenue({
+        id: saved.id,
         date: form.date,
         otherRevenue: amount,
         customers,

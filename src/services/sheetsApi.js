@@ -74,8 +74,8 @@ export async function logUdhar({ customerName, amount, type, date, notes }) {
 }
 
 // Log other/manual revenue entry
-export async function logManualRevenue({ date, otherRevenue, customers, notes }) {
-  return callScript({ action: 'logManualRevenue', date, otherRevenue, customers, notes: notes || '' })
+export async function logManualRevenue({ id, date, otherRevenue, customers, notes }) {
+  return callScript({ action: 'logManualRevenue', id, date, otherRevenue, customers, notes: notes || '' })
 }
 
 // Get dashboard data

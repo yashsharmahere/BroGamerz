@@ -132,10 +132,19 @@ function logSession({ id, date, stationIndex, amount, players, durationMins, not
   return { success: true }
 }
 
-// ─── Log Manual Revenue → Daily Revenue tab ───────────────────────────────────
-function logManualRevenue({ date, otherRevenue, customers, notes }) {
+// ─── Log Manual Revenue → Daily Revenue tab + Sessions tab ───────────────────
+function logManualRevenue({ id, date, otherRevenue, customers, notes }) {
   const sheet = ss.getSheetByName('Daily Revenue')
   if (!sheet) throw new Error('Daily Revenue sheet not found')
+
+  // Record it as an individual "Other" session too, so it keeps its own log
+  // entry (matched to the app by id) instead of collapsing into a daily total.
+  if (otherRevenue) {
+    const sessSheet = getOrCreateSheet('Sessions', [
+      'ID', 'Date', 'Station', 'StationIndex', 'Amount', 'Players', 'DurationMins', 'Notes', 'SavedAt', 'EditedAt'
+    ])
+    sessSheet.appendRow([String(id || ''), date, 'Other', 0, otherRevenue, customers || 0, 0, notes || '', new Date().toISOString(), ''])
+  }
 
   const rowNum = findRowByDate(sheet, date)
 
@@ -430,6 +439,10 @@ function stableIdGs(dateStr, offset) {
   catch(e) { return Date.now() + offset }
 }
 
+function stationName(si) {
+  return si === 1 ? 'PS5 Station 1' : si === 2 ? 'PS5 Station 2' : 'Other'
+}
+
 function onSheetEdit(e) {
   const sheet = e.range.getSheet()
   const row = e.range.getRow()
@@ -445,33 +458,74 @@ function onSheetEdit(e) {
   } catch(err) { Logger.log('onSheetEdit error: ' + err.message) }
 }
 
-// Rebuild the ENTIRE Firebase /sessions node from the Daily Revenue sheet.
-// One atomic PUT replaces the whole node, so adds, edits AND deletes all
-// propagate: a cleared cell simply isn't in the rebuilt object, so it's gone.
-// This is a WRITE (reliable) instead of a DELETE (unreliable via REST) and
-// leaves no orphan entries and needs no delete markers.
+// Rebuild the ENTIRE Firebase /sessions node with one atomic PUT.
+//
+// Individual sessions come from the Sessions tab (so each start/stop keeps its
+// own log entry with its real id) — but a session is only kept if its
+// date + station still has a value in Daily Revenue. That means:
+//   • adds / edits from the app → new/updated Sessions-tab rows → reflected
+//   • the friend clearing a Daily Revenue cell → that date+station drops out of
+//     the active set → its sessions disappear (the delete fix stays working)
+//   • a Daily Revenue day with a value but NO individual sessions (the friend
+//     typed a total straight into the sheet) → one aggregate entry
+// A full-node PUT is a reliable WRITE (unlike REST DELETE) and leaves no orphans.
 function rebuildSessions() {
-  const sheet = ss.getSheetByName('Daily Revenue')
-  if (!sheet) return
-  const data = sheet.getDataRange().getValues()
-  const out = {}
+  const drSheet = ss.getSheetByName('Daily Revenue')
+  if (!drSheet) return
+  const sessSheet = ss.getSheetByName('Sessions')
 
-  for (let i = 1; i < data.length; i++) {
-    const r = data[i]
+  // 1. Active date|stationIndex keys from Daily Revenue (a value > 0 = it exists).
+  const active = {}
+  const dr = drSheet.getDataRange().getValues()
+  for (let i = 1; i < dr.length; i++) {
+    const r = dr[i]
     if (!r[0]) continue
     const dateStr = typeof r[0] === 'string' ? r[0] : Utilities.formatDate(new Date(r[0]), 'Asia/Kolkata', 'yyyy-MM-dd')
-    const ps5_1 = Number(r[1]) || 0
-    const ps5_2 = Number(r[2]) || 0
-    const other = Number(r[3]) || 0
     const customers = Number(r[5]) || 1
     const notes = r[6] || ''
-    const savedAt = new Date(dateStr + 'T00:00:00').toISOString()
-    const base = stableIdGs(dateStr, 0)
-
-    if (ps5_1 > 0) { const id = base + 1; out[id] = { id, date: dateStr, station: 'PS5 Station 1', stationIndex: 1, amount: ps5_1, players: customers, durationMins: 0, notes, savedAt } }
-    if (ps5_2 > 0) { const id = base + 2; out[id] = { id, date: dateStr, station: 'PS5 Station 2', stationIndex: 2, amount: ps5_2, players: customers, durationMins: 0, notes, savedAt } }
-    if (other > 0) { const id = base + 3; out[id] = { id, date: dateStr, station: 'Other', stationIndex: 0, amount: other, players: 0, durationMins: 0, notes, savedAt } }
+    ;[[1, Number(r[1]) || 0], [2, Number(r[2]) || 0], [0, Number(r[3]) || 0]].forEach(function (pair) {
+      const si = pair[0], amt = pair[1]
+      if (amt > 0) active[dateStr + '|' + si] = { date: dateStr, stationIndex: si, amount: amt, customers, notes }
+    })
   }
+
+  const out = {}
+  const claimed = {}
+
+  // 2. Emit individual Sessions-tab rows whose date|station is still active.
+  if (sessSheet) {
+    const sd = sessSheet.getDataRange().getValues()
+    for (let i = 1; i < sd.length; i++) {
+      const r = sd[i]
+      if (!r[0] || !r[1]) continue
+      const id = Number(r[0]) || String(r[0])
+      const dateStr = typeof r[1] === 'string' ? r[1] : Utilities.formatDate(new Date(r[1]), 'Asia/Kolkata', 'yyyy-MM-dd')
+      const si = Number(r[3])
+      const key = dateStr + '|' + si
+      if (!active[key]) continue // deleted from Daily Revenue → skip
+      claimed[key] = true
+      out[id] = {
+        id, date: dateStr, station: r[2] || stationName(si), stationIndex: si,
+        amount: Number(r[4]) || 0, players: Number(r[5]) || 1,
+        durationMins: Number(r[6]) || 0, notes: r[7] || '',
+        savedAt: r[8] ? String(r[8]) : dateStr,
+        editedAt: r[9] ? String(r[9]) : '',
+      }
+    }
+  }
+
+  // 3. Active keys with no individual rows = a total typed straight into the
+  //    sheet → emit a single aggregate entry with a deterministic id.
+  Object.keys(active).forEach(function (key) {
+    if (claimed[key]) return
+    const a = active[key]
+    const id = stableIdGs(a.date, 0) + (a.stationIndex + 1)
+    out[id] = {
+      id, date: a.date, station: stationName(a.stationIndex), stationIndex: a.stationIndex,
+      amount: a.amount, players: a.stationIndex === 0 ? 0 : a.customers,
+      durationMins: 0, notes: a.notes, savedAt: new Date(a.date + 'T00:00:00').toISOString(),
+    }
+  })
 
   firebasePut('/sessions', out)
 }
@@ -479,7 +533,7 @@ function rebuildSessions() {
 // Run once from the Apps Script editor to force a full resync / cleanup.
 function forceSync() {
   rebuildSessions()
-  Logger.log('Sessions rebuilt from Daily Revenue')
+  Logger.log('Sessions rebuilt')
 }
 
 function syncExpenseRow(sheet, row) {
