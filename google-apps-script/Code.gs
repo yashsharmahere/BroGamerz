@@ -518,18 +518,18 @@ function rebuildSessions() {
     }
   }
 
-  // 3. Emit. Keep the individual rows only if they sum to the sheet's total;
-  //    otherwise emit one aggregate at the total so PWA and sheet always match.
+  // 3. Emit. Whenever a date+station has individual sessions, keep them SEPARATE
+  //    (one log entry each). Only when a day has a value in Daily Revenue but no
+  //    individual sessions (a total typed straight into the sheet) do we emit a
+  //    single aggregate entry. In normal app use the sessions bump the Daily
+  //    Revenue cell by exactly their amount, so they still sum to the sheet total.
   const out = {}
   Object.keys(active).forEach(function (key) {
     const a = active[key]
     const rows = rowsByKey[key]
     if (rows && rows.length) {
-      const sum = rows.reduce(function (s, x) { return s + x.amount }, 0)
-      if (sum === a.amount) {
-        rows.forEach(function (x) { out[x.id] = x })
-        return
-      }
+      rows.forEach(function (x) { out[x.id] = x })
+      return
     }
     const id = stableIdGs(a.date, 0) + (a.stationIndex + 1)
     out[id] = {
