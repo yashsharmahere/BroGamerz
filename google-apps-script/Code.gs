@@ -541,13 +541,21 @@ function rebuildSessions() {
   //    individual sessions (a total typed straight into the sheet) do we emit a
   //    single aggregate entry. In normal app use the sessions bump the Daily
   //    Revenue cell by exactly their amount, so they still sum to the sheet total.
+  // Emit. If the individual sessions add up to the Daily Revenue total, show them
+  // SEPARATELY (normal app use — the server keeps them equal). If someone typed a
+  // DIFFERENT total straight into the Daily Revenue cell, respect that edit and
+  // show one aggregate at the sheet's total — so direct sheet edits never break
+  // or contradict the PWA. A day with a value but no sessions → one aggregate.
   const out = {}
   Object.keys(active).forEach(function (key) {
     const a = active[key]
     const rows = rowsByKey[key]
     if (rows && rows.length) {
-      rows.forEach(function (x) { out[x.id] = x })
-      return
+      const sum = rows.reduce(function (s, x) { return s + x.amount }, 0)
+      if (sum === a.amount) {
+        rows.forEach(function (x) { out[x.id] = x })
+        return
+      }
     }
     const id = stableIdGs(a.date, 0) + (a.stationIndex + 1)
     out[id] = {
