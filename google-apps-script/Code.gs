@@ -467,21 +467,21 @@ function onSheetEdit(e) {
 
 // Rebuild the ENTIRE Firebase /sessions node with one atomic PUT.
 //
-// Individual sessions come from the Sessions tab (so each start/stop keeps its
-// own log entry with its real id) — but a session is only kept if its
-// date + station still has a value in Daily Revenue. That means:
-//   • adds / edits from the app → new/updated Sessions-tab rows → reflected
-//   • the friend clearing a Daily Revenue cell → that date+station drops out of
-//     the active set → its sessions disappear (the delete fix stays working)
-//   • a Daily Revenue day with a value but NO individual sessions (the friend
-//     typed a total straight into the sheet) → one aggregate entry
+// Daily Revenue holds the authoritative TOTAL per date+station; the Sessions tab
+// holds the individual breakdown. For each date+station that has a value:
+//   • if the individual sessions add up to the Daily Revenue total → emit them
+//     individually (so each start/stop keeps its own log entry)
+//   • if they DON'T add up (a total was typed/edited straight into the sheet, or
+//     there are no individual rows) → emit ONE aggregate entry at the sheet's
+//     total, so the PWA total always matches the sheet
+//   • a cleared Daily Revenue cell drops out entirely (the delete fix)
 // A full-node PUT is a reliable WRITE (unlike REST DELETE) and leaves no orphans.
 function rebuildSessions() {
   const drSheet = ss.getSheetByName('Daily Revenue')
   if (!drSheet) return
   const sessSheet = ss.getSheetByName('Sessions')
 
-  // 1. Active date|stationIndex keys from Daily Revenue (a value > 0 = it exists).
+  // 1. Authoritative totals per date|stationIndex from Daily Revenue.
   const active = {}
   const dr = drSheet.getDataRange().getValues()
   for (let i = 1; i < dr.length; i++) {
@@ -496,36 +496,41 @@ function rebuildSessions() {
     })
   }
 
-  const out = {}
-  const claimed = {}
-
-  // 2. Emit individual Sessions-tab rows whose date|station is still active.
+  // 2. Collect the individual Sessions-tab rows for each active date|station.
+  const rowsByKey = {}
   if (sessSheet) {
     const sd = sessSheet.getDataRange().getValues()
     for (let i = 1; i < sd.length; i++) {
       const r = sd[i]
       if (!r[0] || !r[1]) continue
-      const id = Number(r[0]) || String(r[0])
       const dateStr = typeof r[1] === 'string' ? r[1] : Utilities.formatDate(new Date(r[1]), 'Asia/Kolkata', 'yyyy-MM-dd')
       const si = Number(r[3])
       const key = dateStr + '|' + si
       if (!active[key]) continue // deleted from Daily Revenue → skip
-      claimed[key] = true
-      out[id] = {
-        id, date: dateStr, station: r[2] || stationName(si), stationIndex: si,
+      ;(rowsByKey[key] = rowsByKey[key] || []).push({
+        id: Number(r[0]) || String(r[0]), date: dateStr,
+        station: r[2] || stationName(si), stationIndex: si,
         amount: Number(r[4]) || 0, players: Number(r[5]) || 1,
         durationMins: Number(r[6]) || 0, notes: r[7] || '',
         savedAt: r[8] ? String(r[8]) : dateStr,
         editedAt: r[9] ? String(r[9]) : '',
-      }
+      })
     }
   }
 
-  // 3. Active keys with no individual rows = a total typed straight into the
-  //    sheet → emit a single aggregate entry with a deterministic id.
+  // 3. Emit. Keep the individual rows only if they sum to the sheet's total;
+  //    otherwise emit one aggregate at the total so PWA and sheet always match.
+  const out = {}
   Object.keys(active).forEach(function (key) {
-    if (claimed[key]) return
     const a = active[key]
+    const rows = rowsByKey[key]
+    if (rows && rows.length) {
+      const sum = rows.reduce(function (s, x) { return s + x.amount }, 0)
+      if (sum === a.amount) {
+        rows.forEach(function (x) { out[x.id] = x })
+        return
+      }
+    }
     const id = stableIdGs(a.date, 0) + (a.stationIndex + 1)
     out[id] = {
       id, date: a.date, station: stationName(a.stationIndex), stationIndex: a.stationIndex,
