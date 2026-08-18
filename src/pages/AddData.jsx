@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { IndianRupee, Users, StickyNote, Calendar, CheckCircle } from 'lucide-react'
 import { appendRevenue } from '../services/storage'
 import { logManualRevenue } from '../services/sheetsApi'
-import { writeSession } from '../services/firebaseDb'
 import { useToast } from '../components/Toast'
 import { playConfirmBeep } from '../services/audio'
 
@@ -30,7 +29,7 @@ export default function AddData() {
 
     setSaving(true)
     try {
-      const saved = appendRevenue({
+      appendRevenue({
         date: form.date,
         station: 'Other',
         stationIndex: 0,
@@ -38,7 +37,7 @@ export default function AddData() {
         players: customers,
         notes: form.notes,
       })
-      writeSession(saved).catch(() => {})
+      // Log to the Sheet — its onEdit trigger is the single writer to Firebase
       logManualRevenue({
         date: form.date,
         otherRevenue: amount,

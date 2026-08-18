@@ -8,7 +8,7 @@ import {
   appendRevenue, loadRevenueLog, updateRevenue, deleteRevenue, getDayStationTotal
 } from '../services/storage'
 import { logSession, updateDayRevenue, updateSessionInSheet, deleteSessionFromSheet } from '../services/sheetsApi'
-import { writeSession, updateSessionFb, deleteSessionFb, subscribeSessions, subscribeConnected, subscribeDeletedSessions } from '../services/firebaseDb'
+import { subscribeSessions, subscribeConnected } from '../services/firebaseDb'
 import { playConfirmBeep, requestNotificationPermission } from '../services/audio'
 
 function formatTime(secs) {
@@ -215,7 +215,7 @@ export default function Sessions() {
   const [editingEntry, setEditingEntry] = useState(null)
   const [log, setLog] = useState(() => loadRevenueLog())
   const [firebaseSessions, setFirebaseSessions] = useState([])
-  const [deletedIds, setDeletedIds] = useState({})
+  const [fbLoaded, setFbLoaded] = useState(false)
   const [isLive, setIsLive] = useState(false)
   const toast = useToast()
 
@@ -223,22 +223,9 @@ export default function Sessions() {
 
   // Firebase real-time listeners
   useEffect(() => {
-    const unsubSessions = subscribeSessions(data => setFirebaseSessions(data))
+    const unsubSessions = subscribeSessions(data => { setFirebaseSessions(data); setFbLoaded(true) })
     const unsubConnected = subscribeConnected(connected => setIsLive(connected))
-    const unsubDeleted = subscribeDeletedSessions(deleted => {
-      setDeletedIds(deleted)
-      const ids = Object.keys(deleted)
-      if (ids.length === 0) return
-      // Remove sheet-deleted sessions from localStorage so they disappear on this device too
-      const deletedSet = new Set(ids.map(String))
-      const current = loadRevenueLog()
-      const hits = current.filter(e => deletedSet.has(String(e.id)))
-      if (hits.length > 0) {
-        hits.forEach(e => deleteRevenue(e.id))
-        setLog(loadRevenueLog())
-      }
-    })
-    return () => { unsubSessions(); unsubConnected(); unsubDeleted() }
+    return () => { unsubSessions(); unsubConnected() }
   }, [])
 
   const refreshLog = useCallback(() => setLog(loadRevenueLog()), [])
@@ -262,8 +249,7 @@ export default function Sessions() {
     refreshLog()
     playConfirmBeep()
     toast(`Session saved · ₹${amount.toLocaleString('en-IN')}`, 'success')
-    // Write to Firebase (real-time) + Sheets (backup)
-    writeSession(saved).catch(() => {})
+    // Log to the Sheet — the Sheet's onEdit trigger is the single writer to Firebase
     logSession({ ...saved }).catch(() => {})
     stopSession(stationId)
     resetSession(stationId)
@@ -274,8 +260,7 @@ export default function Sessions() {
   const handleSaveEdit = async (updated) => {
     updateRevenue(updated.id, updated)
     refreshLog()
-    // Firebase (real-time) + Sheets (backup)
-    updateSessionFb(updated.id, updated).catch(() => {})
+    // Update the Sheet — its onEdit trigger rebuilds Firebase from the new totals
     updateSessionInSheet(updated).catch(() => {})
     const newTotal = getDayStationTotal(updated.date, updated.stationIndex)
     updateDayRevenue({ date: updated.date, stationIndex: updated.stationIndex, newTotal }).catch(() => {})
@@ -291,8 +276,7 @@ export default function Sessions() {
     const entry = editingEntry
     deleteRevenue(id)
     refreshLog()
-    // Firebase (real-time) + Sheets (backup)
-    deleteSessionFb(id).catch(() => {})
+    // Update the Sheet — its onEdit trigger rebuilds Firebase from the new totals
     deleteSessionFromSheet(id).catch(() => {})
     const newTotal = getDayStationTotal(entry.date, entry.stationIndex)
     updateDayRevenue({ date: entry.date, stationIndex: entry.stationIndex, newTotal }).catch(() => {})
@@ -300,18 +284,26 @@ export default function Sessions() {
     setEditingEntry(null)
   }
 
-  // Merge local log + Firebase sessions by ID (Firebase fills in cross-device entries)
+  // The Google Sheet (via Firebase) is the source of truth for the log.
+  // Once Firebase has loaded we show ITS data — so edits, adds and deletes made
+  // in the sheet all reflect here, including clearing a cell (which removes the
+  // entry). We only add a local entry on top of Firebase if it was saved in the
+  // last 30s and the sheet hasn't produced its aggregate yet — this gives instant
+  // feedback right after ending a session, without ever resurrecting a deleted one.
   const mergedLog = useMemo(() => {
-    const byId = {}
-    log.forEach(e => { byId[String(e.id)] = e })
-    firebaseSessions.forEach(s => {
-      const key = String(s.id)
-      if (!byId[key]) byId[key] = { ...s, fromCloud: true }
+    const byDate = (a, b) => (b.date || '').localeCompare(a.date || '')
+
+    // Offline or Firebase not ready yet → fall back to the on-device log.
+    if (!fbLoaded) return [...log].sort(byDate)
+
+    const covered = new Set(firebaseSessions.map(s => `${s.date}|${s.stationIndex}`))
+    const now = Date.now()
+    const pendingLocal = log.filter(e => {
+      const t = e.savedAt ? Date.parse(e.savedAt) : 0
+      return (now - t) < 30000 && !covered.has(`${e.date}|${e.stationIndex}`)
     })
-    return Object.values(byId)
-      .filter(e => !deletedIds[String(e.id)])
-      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-  }, [log, firebaseSessions, deletedIds])
+    return [...firebaseSessions, ...pendingLocal].sort(byDate)
+  }, [log, firebaseSessions, fbLoaded])
 
   const totalActive = sessions.filter(s => s.isRunning).length
   const totalRevenue = sessions.reduce((sum, s) => sum + (s.isRunning ? s.currentCharge : 0), 0)

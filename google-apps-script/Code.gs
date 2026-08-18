@@ -425,47 +425,9 @@ function firebasePut(path, data) {
   })
 }
 
-function firebaseDelete(path) {
-  UrlFetchApp.fetch(FIREBASE_URL + path + '.json', {
-    method: 'PUT',
-    contentType: 'application/json',
-    payload: 'null',
-    muteHttpExceptions: true,
-  })
-}
-
-function markDeleted(id) {
-  UrlFetchApp.fetch(FIREBASE_URL + '/deletedSessions/' + id + '.json', {
-    method: 'PUT',
-    contentType: 'application/json',
-    payload: 'true',
-    muteHttpExceptions: true,
-  })
-}
-
 function stableIdGs(dateStr, offset) {
   try { return new Date(dateStr + 'T00:00:00').getTime() + offset }
   catch(e) { return Date.now() + offset }
-}
-
-function stationNameFromIdx(idx) {
-  return idx === 1 ? 'PS5 Station 1' : idx === 2 ? 'PS5 Station 2' : 'Other'
-}
-
-// Look up the Sessions tab to find real Firebase IDs for a given date + stationIndex
-function getSessionIdsForDateStation(dateStr, stationIndex) {
-  const sheet = ss.getSheetByName('Sessions')
-  if (!sheet) return []
-  const data = sheet.getDataRange().getValues().slice(1)
-  const ids = []
-  for (const r of data) {
-    if (!r[0] || !r[1]) continue
-    const d = typeof r[1] === 'string' ? r[1] : Utilities.formatDate(new Date(r[1]), 'Asia/Kolkata', 'yyyy-MM-dd')
-    if (d === dateStr && Number(r[3]) === stationIndex) {
-      ids.push(Number(r[0]) || String(r[0]))
-    }
-  }
-  return ids
 }
 
 function onSheetEdit(e) {
@@ -473,90 +435,51 @@ function onSheetEdit(e) {
   const row = e.range.getRow()
   try {
     switch (sheet.getName()) {
-      case 'Daily Revenue': syncDailyRevenueRow(sheet, row); break
-      case 'Sessions':      syncSessionRow(sheet, row);      break
-      case 'Expenses':      syncExpenseRow(sheet, row);      break
-      case 'Udhar':         syncUdharRow(sheet, row);        break
+      // Daily Revenue is the source of truth for the session log. Any edit
+      // (add / change / clear a cell) rebuilds the entire /sessions node.
+      case 'Daily Revenue': rebuildSessions();          break
+      case 'Sessions':      rebuildSessions();          break
+      case 'Expenses':      syncExpenseRow(sheet, row); break
+      case 'Udhar':         syncUdharRow(sheet, row);   break
     }
   } catch(err) { Logger.log('onSheetEdit error: ' + err.message) }
 }
 
-function syncDailyRevenueRow(sheet, row) {
-  if (row <= 1) return
-  const r = sheet.getRange(row, 1, 1, 7).getValues()[0]
-  if (!r[0]) return
-  const dateStr = typeof r[0] === 'string' ? r[0] : Utilities.formatDate(new Date(r[0]), 'Asia/Kolkata', 'yyyy-MM-dd')
-  const ps5_1 = Number(r[1]) || 0
-  const ps5_2 = Number(r[2]) || 0
-  const other  = Number(r[3]) || 0
-  const customers = Number(r[5]) || 1
-  const notes = r[6] || ''
-  const savedAt = new Date(dateStr + 'T00:00:00').toISOString()
-  const base = stableIdGs(dateStr, (row - 2) * 10)
-
-  syncStationEntry(dateStr, 1, ps5_1, customers, notes, savedAt, base + 1)
-  syncStationEntry(dateStr, 2, ps5_2, customers, notes, savedAt, base + 2)
-  syncStationEntry(dateStr, 0, other, 0, notes, savedAt, base + 3)
-}
-
-// Sync one station's value to Firebase, using real session IDs from the Sessions tab
-function syncStationEntry(dateStr, stationIndex, amount, customers, notes, savedAt, fallbackId) {
-  const sName = stationNameFromIdx(stationIndex)
-  const ids = getSessionIdsForDateStation(dateStr, stationIndex)
-
-  if (ids.length > 0) {
-    if (amount === 0) {
-      // Cell cleared → delete from Firebase + write to deletedSessions so PWA clears localStorage too
-      ids.forEach(id => {
-        firebaseDelete('/sessions/' + id)
-        markDeleted(id)
-      })
-    } else {
-      // Update primary session with new amount
-      firebasePut('/sessions/' + ids[0], {
-        id: ids[0], date: dateStr, station: sName, stationIndex, amount,
-        players: customers, durationMins: 0, notes, savedAt,
-      })
-    }
-    // Always purge the stale fallback entry — this fixes customer count doubling
-    firebaseDelete('/sessions/' + fallbackId)
-  } else {
-    // No Sessions tab entry (manually entered in sheet) — use fallback ID
-    if (amount === 0) {
-      firebaseDelete('/sessions/' + fallbackId)
-      markDeleted(fallbackId)
-    } else {
-      firebasePut('/sessions/' + fallbackId, {
-        id: fallbackId, date: dateStr, station: sName, stationIndex, amount,
-        players: customers, durationMins: 0, notes, savedAt,
-      })
-    }
-  }
-}
-
-// Run once from Apps Script editor → cleans up all stale Firebase duplicates
-function forceSync() {
+// Rebuild the ENTIRE Firebase /sessions node from the Daily Revenue sheet.
+// One atomic PUT replaces the whole node, so adds, edits AND deletes all
+// propagate: a cleared cell simply isn't in the rebuilt object, so it's gone.
+// This is a WRITE (reliable) instead of a DELETE (unreliable via REST) and
+// leaves no orphan entries and needs no delete markers.
+function rebuildSessions() {
   const sheet = ss.getSheetByName('Daily Revenue')
-  if (!sheet) { Logger.log('No Daily Revenue sheet'); return }
+  if (!sheet) return
   const data = sheet.getDataRange().getValues()
-  let count = 0
-  for (let row = 2; row <= data.length; row++) {
-    if (data[row - 1][0]) { syncDailyRevenueRow(sheet, row); count++ }
+  const out = {}
+
+  for (let i = 1; i < data.length; i++) {
+    const r = data[i]
+    if (!r[0]) continue
+    const dateStr = typeof r[0] === 'string' ? r[0] : Utilities.formatDate(new Date(r[0]), 'Asia/Kolkata', 'yyyy-MM-dd')
+    const ps5_1 = Number(r[1]) || 0
+    const ps5_2 = Number(r[2]) || 0
+    const other = Number(r[3]) || 0
+    const customers = Number(r[5]) || 1
+    const notes = r[6] || ''
+    const savedAt = new Date(dateStr + 'T00:00:00').toISOString()
+    const base = stableIdGs(dateStr, 0)
+
+    if (ps5_1 > 0) { const id = base + 1; out[id] = { id, date: dateStr, station: 'PS5 Station 1', stationIndex: 1, amount: ps5_1, players: customers, durationMins: 0, notes, savedAt } }
+    if (ps5_2 > 0) { const id = base + 2; out[id] = { id, date: dateStr, station: 'PS5 Station 2', stationIndex: 2, amount: ps5_2, players: customers, durationMins: 0, notes, savedAt } }
+    if (other > 0) { const id = base + 3; out[id] = { id, date: dateStr, station: 'Other', stationIndex: 0, amount: other, players: 0, durationMins: 0, notes, savedAt } }
   }
-  Logger.log('Force synced ' + count + ' rows')
+
+  firebasePut('/sessions', out)
 }
 
-function syncSessionRow(sheet, row) {
-  if (row <= 1) return
-  const r = sheet.getRange(row, 1, 1, 10).getValues()[0]
-  if (!r[0]) return
-  const id = Number(r[0]) || String(r[0])
-  const dateStr = typeof r[1] === 'string' ? r[1] : Utilities.formatDate(new Date(r[1]), 'Asia/Kolkata', 'yyyy-MM-dd')
-  firebasePut('/sessions/' + id, {
-    id, date: dateStr, station: r[2], stationIndex: Number(r[3]), amount: Number(r[4]),
-    players: Number(r[5]) || 1, durationMins: Number(r[6]) || 0, notes: r[7] || '',
-    savedAt: r[8] ? String(r[8]) : dateStr,
-  })
+// Run once from the Apps Script editor to force a full resync / cleanup.
+function forceSync() {
+  rebuildSessions()
+  Logger.log('Sessions rebuilt from Daily Revenue')
 }
 
 function syncExpenseRow(sheet, row) {

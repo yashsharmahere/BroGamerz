@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app'
-import { getDatabase, ref, set, update, remove, onValue } from 'firebase/database'
+import { getDatabase, ref, set, update, onValue } from 'firebase/database'
 import { FIREBASE_CONFIG } from '../config'
 
 const app = initializeApp(FIREBASE_CONFIG)
@@ -28,16 +28,9 @@ export const subscribeSessions = (cb) =>
     cb(Object.values(val).filter(s => s && (s.amount || 0) > 0).sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '')))
   })
 
+// Used only by the one-time Sheets→Firebase migration. Day-to-day, the Google
+// Sheet's onEdit trigger is the single writer to /sessions (full-node rebuild).
 export const writeSession = (entry) => set(R(`sessions/${entry.id}`), entry)
-
-export const updateSessionFb = (id, updates) =>
-  update(R(`sessions/${id}`), { ...updates, editedAt: new Date().toISOString() })
-
-export const deleteSessionFb = (id) => remove(R(`sessions/${id}`))
-
-// ─── Deleted Sessions (sheet→app delete sync) ─────────────────────────────────
-export const subscribeDeletedSessions = (cb) =>
-  onValue(R('deletedSessions'), snap => cb(snap.val() ?? {}))
 
 // ─── Expenses ─────────────────────────────────────────────────────────────────
 export const subscribeExpenses = (cb) =>
