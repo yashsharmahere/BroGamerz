@@ -217,6 +217,7 @@ export default function Sessions() {
   const [firebaseSessions, setFirebaseSessions] = useState([])
   const [fbLoaded, setFbLoaded] = useState(false)
   const [isLive, setIsLive] = useState(false)
+  const [deletingIds, setDeletingIds] = useState({}) // ids removed locally, awaiting sheet round-trip
   const toast = useToast()
 
   useEffect(() => { requestNotificationPermission() }, [])
@@ -227,6 +228,22 @@ export default function Sessions() {
     const unsubConnected = subscribeConnected(connected => setIsLive(connected))
     return () => { unsubSessions(); unsubConnected() }
   }, [])
+
+  // Once Firebase confirms a deletion (the id is gone from its data), stop
+  // tracking it. A fallback timer clears it anyway so a failed delete reappears.
+  useEffect(() => {
+    const ids = Object.keys(deletingIds)
+    if (ids.length === 0) return
+    const fbIds = new Set(firebaseSessions.map(s => String(s.id)))
+    const confirmed = ids.filter(id => !fbIds.has(id))
+    if (confirmed.length > 0) {
+      setDeletingIds(prev => {
+        const next = { ...prev }
+        confirmed.forEach(id => delete next[id])
+        return next
+      })
+    }
+  }, [firebaseSessions, deletingIds])
 
   const refreshLog = useCallback(() => setLog(loadRevenueLog()), [])
   const handleEditEntry = useCallback((entry) => setEditingEntry(entry), [])
@@ -276,6 +293,12 @@ export default function Sessions() {
     const entry = editingEntry
     deleteRevenue(id)
     refreshLog()
+    // Hide it right away (optimistic) — Firebase catches up after the sheet
+    // round-trip. Fallback timer clears the flag so a failed delete reappears.
+    setDeletingIds(prev => ({ ...prev, [String(id)]: true }))
+    setTimeout(() => {
+      setDeletingIds(prev => { const next = { ...prev }; delete next[String(id)]; return next })
+    }, 15000)
     // Update the Sheet — its onEdit trigger rebuilds Firebase from the new totals
     deleteSessionFromSheet(id).catch(() => {})
     const newTotal = getDayStationTotal(entry.date, entry.stationIndex)
@@ -302,8 +325,10 @@ export default function Sessions() {
       const t = e.savedAt ? Date.parse(e.savedAt) : 0
       return (now - t) < 30000 && !fbIds.has(String(e.id))
     })
-    return [...firebaseSessions, ...pendingLocal].sort(byDate)
-  }, [log, firebaseSessions, fbLoaded])
+    return [...firebaseSessions, ...pendingLocal]
+      .filter(e => !deletingIds[String(e.id)]) // hide entries being deleted
+      .sort(byDate)
+  }, [log, firebaseSessions, fbLoaded, deletingIds])
 
   const totalActive = sessions.filter(s => s.isRunning).length
   const totalRevenue = sessions.reduce((sum, s) => sum + (s.isRunning ? s.currentCharge : 0), 0)
