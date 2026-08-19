@@ -93,37 +93,21 @@ function findRowByDate(sheet, dateStr) {
   return -1
 }
 
-// Recompute the Daily Revenue station cells (B/C/D) for a date from the Sessions
-// tab, so the sheet's daily total always equals the sum of the individual
-// sessions. Only overwrites a station's cell if that station HAS session rows
-// for the date — days with a manually typed total (no sessions) are left alone.
-function syncDailyRevenueForDate(dateStr) {
-  const drSheet = ss.getSheetByName('Daily Revenue')
-  const sessSheet = ss.getSheetByName('Sessions')
-  if (!drSheet || !sessSheet) return
-
-  const sums = { 1: 0, 2: 0, 0: 0 }
-  const has = { 1: false, 2: false, 0: false }
-  const sd = sessSheet.getDataRange().getValues()
-  for (let i = 1; i < sd.length; i++) {
-    const r = sd[i]
-    if (!r[0] || !r[1]) continue
-    const d = typeof r[1] === 'string' ? r[1] : Utilities.formatDate(new Date(r[1]), 'Asia/Kolkata', 'yyyy-MM-dd')
-    if (d !== dateStr) continue
-    const si = Number(r[3])
-    if (si !== 1 && si !== 2 && si !== 0) continue
-    sums[si] += Number(r[4]) || 0
-    has[si] = true
-  }
-
-  let rowNum = findRowByDate(drSheet, dateStr)
-  if (rowNum === -1) {
-    drSheet.appendRow([dateStr, '', '', '', '', '', ''])
-    rowNum = drSheet.getLastRow()
-  }
-  if (has[1]) drSheet.getRange(rowNum, 2).setValue(sums[1]) // Station 1 → col B
-  if (has[2]) drSheet.getRange(rowNum, 3).setValue(sums[2]) // Station 2 → col C
-  if (has[0]) drSheet.getRange(rowNum, 4).setValue(sums[0]) // Other     → col D
+// Add `delta` to a station's Daily Revenue cell (B/C/D) for a date. Incremental
+// and exact (the server knows the real session amount), so it NEVER wipes a
+// value that was typed straight into the sheet — a logged session ADDS to
+// whatever total is already there, and delete/edit subtract the exact amount.
+// stationIndex: 1 → col B, 2 → col C, 0 (Other) → col D.
+function adjustDailyRevenue(dateStr, stationIndex, delta) {
+  if (!delta) return
+  const sheet = ss.getSheetByName('Daily Revenue')
+  if (!sheet) return
+  let rowNum = findRowByDate(sheet, dateStr)
+  if (rowNum === -1) { sheet.appendRow([dateStr, '', '', '', '', '', '']); rowNum = sheet.getLastRow() }
+  const col = stationIndex === 1 ? 2 : stationIndex === 2 ? 3 : 4
+  const existing = Number(sheet.getRange(rowNum, col).getValue()) || 0
+  const val = existing + delta
+  sheet.getRange(rowNum, col).setValue(val > 0 ? val : '') // clear to blank at 0 → drops out
 }
 
 // ─── Log Session → Sessions tab, then sync Daily Revenue from the sessions ────
@@ -148,9 +132,8 @@ function logSession({ id, date, stationIndex, amount, players, durationMins, not
     sheet.getRange(rowNum, 7).setValue(existingNotes ? `${existingNotes}; ${notes}` : notes)
   }
 
-  // Revenue cells are always recomputed from the Sessions tab → sheet total
-  // always matches the sessions.
-  syncDailyRevenueForDate(date)
+  // ADD this session's amount to whatever total is already there (never wipes it)
+  adjustDailyRevenue(date, stationIndex, Number(amount) || 0)
   return { success: true }
 }
 
@@ -180,8 +163,8 @@ function logManualRevenue({ id, date, otherRevenue, customers, notes }) {
     sheet.getRange(rowNum, 7).setValue(existing ? `${existing}; ${notes}` : notes)
   }
 
-  // Revenue cells are always recomputed from the Sessions tab
-  syncDailyRevenueForDate(date)
+  // ADD the other-revenue amount to whatever is already there (never wipes it)
+  adjustDailyRevenue(date, 0, Number(otherRevenue) || 0)
   return { success: true }
 }
 
@@ -366,9 +349,12 @@ function updateSession({ id, date, station, stationIndex, amount, players, durat
   const sid = String(id)
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][0]) === sid) {
-      // Remember the row's old date so we can resync it too if the date changed.
+      // Remember the row's old date/station/amount so we can adjust exactly.
       const oldRaw = data[i][1]
       const oldDate = typeof oldRaw === 'string' ? oldRaw : Utilities.formatDate(new Date(oldRaw), 'Asia/Kolkata', 'yyyy-MM-dd')
+      const oldStationIndex = Number(data[i][3])
+      const oldAmount = Number(data[i][4]) || 0
+
       const editedAt = Utilities.formatDate(new Date(), 'Asia/Kolkata', 'yyyy-MM-dd HH:mm')
       sheet.getRange(i + 1, 2).setValue(date)
       sheet.getRange(i + 1, 3).setValue(station)
@@ -378,8 +364,10 @@ function updateSession({ id, date, station, stationIndex, amount, players, durat
       sheet.getRange(i + 1, 7).setValue(durationMins || 0)
       sheet.getRange(i + 1, 8).setValue(notes || '')
       sheet.getRange(i + 1, 10).setValue(editedAt)
-      syncDailyRevenueForDate(date)
-      if (oldDate && oldDate !== date) syncDailyRevenueForDate(oldDate)
+
+      // Remove the old amount from where it was, add the new amount where it is now.
+      adjustDailyRevenue(oldDate, oldStationIndex, -oldAmount)
+      adjustDailyRevenue(date, stationIndex, Number(amount) || 0)
       return { success: true }
     }
   }
@@ -396,8 +384,10 @@ function deleteSession({ id }) {
     if (String(data[i][0]) === sid) {
       const raw = data[i][1]
       const dateStr = typeof raw === 'string' ? raw : Utilities.formatDate(new Date(raw), 'Asia/Kolkata', 'yyyy-MM-dd')
+      const si = Number(data[i][3])
+      const amt = Number(data[i][4]) || 0
       sheet.deleteRow(i + 1)
-      syncDailyRevenueForDate(dateStr) // recompute the day's total from remaining sessions
+      adjustDailyRevenue(dateStr, si, -amt) // subtract exactly this session's amount
       return { success: true }
     }
   }
@@ -536,33 +526,36 @@ function rebuildSessions() {
     }
   }
 
-  // 3. Emit. Whenever a date+station has individual sessions, keep them SEPARATE
-  //    (one log entry each). Only when a day has a value in Daily Revenue but no
-  //    individual sessions (a total typed straight into the sheet) do we emit a
-  //    single aggregate entry. In normal app use the sessions bump the Daily
-  //    Revenue cell by exactly their amount, so they still sum to the sheet total.
-  // Emit. If the individual sessions add up to the Daily Revenue total, show them
-  // SEPARATELY (normal app use — the server keeps them equal). If someone typed a
-  // DIFFERENT total straight into the Daily Revenue cell, respect that edit and
-  // show one aggregate at the sheet's total — so direct sheet edits never break
-  // or contradict the PWA. A day with a value but no sessions → one aggregate.
+  // 3. Emit, per date+station:
+  //    • sessions add up to the Daily Revenue total  → show each session SEPARATELY
+  //      (normal app use — the sheet total equals the sessions).
+  //    • sessions add up to LESS than the total      → show each session separately
+  //      PLUS a "from sheets" entry for the leftover (a value typed into the sheet
+  //      on top of the sessions) — nothing is hidden or deleted.
+  //    • sessions add up to MORE than the total (the sheet total was manually
+  //      lowered) OR there are no sessions → one aggregate at the sheet's total.
   const out = {}
   Object.keys(active).forEach(function (key) {
     const a = active[key]
     const rows = rowsByKey[key]
-    if (rows && rows.length) {
-      const sum = rows.reduce(function (s, x) { return s + x.amount }, 0)
-      if (sum === a.amount) {
-        rows.forEach(function (x) { out[x.id] = x })
-        return
+    const aggId = stableIdGs(a.date, 0) + (a.stationIndex + 1)
+    const aggEntry = function (amt) {
+      return {
+        id: aggId, date: a.date, station: stationName(a.stationIndex), stationIndex: a.stationIndex,
+        amount: amt, players: a.stationIndex === 0 ? 0 : a.customers,
+        durationMins: 0, notes: a.notes, savedAt: new Date(a.date + 'T00:00:00').toISOString(),
       }
     }
-    const id = stableIdGs(a.date, 0) + (a.stationIndex + 1)
-    out[id] = {
-      id, date: a.date, station: stationName(a.stationIndex), stationIndex: a.stationIndex,
-      amount: a.amount, players: a.stationIndex === 0 ? 0 : a.customers,
-      durationMins: 0, notes: a.notes, savedAt: new Date(a.date + 'T00:00:00').toISOString(),
+    if (rows && rows.length) {
+      const sum = rows.reduce(function (s, x) { return s + x.amount }, 0)
+      if (sum <= a.amount) {
+        rows.forEach(function (x) { out[x.id] = x })          // each session separate
+        if (sum < a.amount) out[aggId] = aggEntry(a.amount - sum) // leftover from the sheet
+        return
+      }
+      // sum > total → the sheet total was lowered below the sessions; respect it.
     }
+    out[aggId] = aggEntry(a.amount)
   })
 
   firebasePut('/sessions', out)
