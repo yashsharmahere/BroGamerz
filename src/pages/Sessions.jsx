@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, memo } from 'react'
-import { Play, Square, Plus, Minus, Zap, Pencil, Gamepad2, Wifi, WifiOff } from 'lucide-react'
+import { Play, Square, Plus, Minus, Zap, Pencil, Gamepad2, Wifi, WifiOff, ChevronDown, ChevronRight, FileSpreadsheet } from 'lucide-react'
 import { useSessions } from '../hooks/useSessions'
 import EndSessionModal from '../components/EndSessionModal'
 import EditSessionModal from '../components/EditSessionModal'
@@ -18,14 +18,6 @@ function formatTime(secs) {
   return `${h}:${m}:${s}`
 }
 
-function formatMins(mins) {
-  if (!mins) return '—'
-  const h = Math.floor(mins / 60)
-  const m = mins % 60
-  if (h > 0 && m > 0) return `${h}h ${m}m`
-  if (h > 0) return `${h}h`
-  return `${m}m`
-}
 
 function formatTimeOfDay(isoString) {
   if (!isoString) return ''
@@ -92,37 +84,100 @@ function SessionCard({ session, onStart, onStop, onSetPlayers }) {
   )
 }
 
-// ─── Log Entry Row ─────────────────────────────────────────────────────────────
-const LogEntry = memo(function LogEntry({ entry, onEdit }) {
-  const stationColors = { 1: 'text-accent-blue', 2: 'text-accent-purple', 0: 'text-accent-green' }
-  const color = stationColors[entry.stationIndex] ?? 'text-text-secondary'
+const STATION_META = {
+  1: { name: 'PS5 Station 1', color: 'text-accent-blue' },
+  2: { name: 'PS5 Station 2', color: 'text-accent-purple' },
+  0: { name: 'Other', color: 'text-accent-green' },
+}
+
+// A single app-logged session (child row, editable)
+const SessionChildRow = memo(function SessionChildRow({ entry, onEdit }) {
+  return (
+    <div className="flex items-center gap-3 py-2 pl-8">
+      <span className="w-1.5 h-1.5 rounded-full bg-text-muted/50 shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-xs text-text-secondary">
+          {formatTimeOfDay(entry.savedAt) || 'Session'}
+          {entry.players ? ` · ${entry.players} ${entry.players === 1 ? 'player' : 'players'}` : ''}
+          {entry.editedAt ? ' · edited' : ''}
+        </p>
+        {entry.notes ? <p className="text-[11px] text-text-muted italic truncate">{entry.notes}</p> : null}
+      </div>
+      <span className="text-sm font-semibold text-text-primary shrink-0">₹{(entry.amount || 0).toLocaleString('en-IN')}</span>
+      <button
+        onClick={() => onEdit(entry)}
+        className="w-7 h-7 rounded-lg bg-bg-secondary border border-border flex items-center justify-center active:scale-90 shrink-0"
+      >
+        <Pencil size={11} className="text-text-muted" />
+      </button>
+    </div>
+  )
+})
+
+// An amount that was entered/changed directly in the Google Sheet (read-only)
+const SheetChildRow = memo(function SheetChildRow({ entry }) {
+  return (
+    <div className="flex items-center gap-3 py-2 pl-8">
+      <FileSpreadsheet size={12} className="text-accent-green/70 shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-xs text-text-secondary flex items-center gap-1.5">
+          Sheet total
+          <span className="text-[10px] text-text-muted bg-bg-secondary px-1.5 py-0.5 rounded-full">from sheet</span>
+        </p>
+        <p className="text-[11px] text-text-muted">edit this in the Google Sheet</p>
+      </div>
+      <span className="text-sm font-semibold text-text-primary shrink-0">₹{(entry.amount || 0).toLocaleString('en-IN')}</span>
+      <span className="w-7 h-7 shrink-0" />
+    </div>
+  )
+})
+
+// One station for a day: parent shows the station total (always = the sheet
+// cell); children are the individual app sessions + any direct-sheet amount.
+const StationGroup = memo(function StationGroup({ stationIndex, entries, onEdit }) {
+  const [open, setOpen] = useState(true)
+  const meta = STATION_META[stationIndex] || { name: `Station ${stationIndex}`, color: 'text-text-secondary' }
+  const total = entries.reduce((s, e) => s + (e.amount || 0), 0)
+  const sessions = entries.filter(e => e.source !== 'sheet').sort((a, b) => (a.savedAt || '').localeCompare(b.savedAt || ''))
+  const sheetEntries = entries.filter(e => e.source === 'sheet')
+
+  // Pure sheet total (no app sessions) → a single non-expandable row
+  if (sessions.length === 0) {
+    return (
+      <div className="flex items-center gap-3 py-3 border-b border-border last:border-0">
+        <div className="w-8 h-8 rounded-lg bg-bg-secondary flex items-center justify-center shrink-0">
+          <Gamepad2 size={14} className={meta.color} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className={`text-sm font-semibold ${meta.color}`}>{meta.name}</p>
+          <p className="text-[11px] text-text-muted">from Google Sheet</p>
+        </div>
+        <span className="text-sm font-bold text-text-primary shrink-0">₹{total.toLocaleString('en-IN')}</span>
+      </div>
+    )
+  }
 
   return (
-    <div className="flex items-center gap-3 py-3 border-b border-border last:border-0">
-      <div className="w-8 h-8 rounded-lg bg-bg-secondary flex items-center justify-center shrink-0">
-        <Gamepad2 size={14} className={color} />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <p className={`text-sm font-semibold ${color}`}>{entry.station || `Station ${entry.stationIndex}`}</p>
-          {entry.editedAt && <span className="text-[10px] text-text-muted bg-bg-secondary px-1.5 py-0.5 rounded-full">edited</span>}
+    <div className="border-b border-border last:border-0">
+      <button onClick={() => setOpen(v => !v)} className="w-full flex items-center gap-2.5 py-3">
+        {open ? <ChevronDown size={15} className="text-text-muted shrink-0" /> : <ChevronRight size={15} className="text-text-muted shrink-0" />}
+        <div className="w-8 h-8 rounded-lg bg-bg-secondary flex items-center justify-center shrink-0">
+          <Gamepad2 size={14} className={meta.color} />
         </div>
-        <p className="text-xs text-text-muted mt-0.5">
-          {formatMins(entry.durationMins)}
-          {entry.players ? ` · ${entry.players} ${entry.players === 1 ? 'player' : 'players'}` : ''}
-          {entry.savedAt ? ` · ${formatTimeOfDay(entry.savedAt)}` : ''}
-        </p>
-        {entry.notes ? <p className="text-xs text-text-muted italic mt-0.5 truncate">{entry.notes}</p> : null}
-      </div>
-      <div className="flex items-center gap-2 shrink-0">
-        <span className="text-sm font-bold text-text-primary">₹{(entry.amount || 0).toLocaleString('en-IN')}</span>
-        <button
-          onClick={() => onEdit(entry)}
-          className="w-7 h-7 rounded-lg bg-bg-secondary border border-border flex items-center justify-center active:scale-90"
-        >
-          <Pencil size={12} className="text-text-muted" />
-        </button>
-      </div>
+        <div className="flex-1 min-w-0 text-left">
+          <p className={`text-sm font-semibold ${meta.color}`}>{meta.name}</p>
+          <p className="text-[11px] text-text-muted">
+            {sessions.length} session{sessions.length > 1 ? 's' : ''}{sheetEntries.length ? ' + sheet' : ''}
+          </p>
+        </div>
+        <span className="text-sm font-bold text-text-primary shrink-0">₹{total.toLocaleString('en-IN')}</span>
+      </button>
+      {open && (
+        <div className="pb-1">
+          {sessions.map(e => <SessionChildRow key={e.id} entry={e} onEdit={onEdit} />)}
+          {sheetEntries.map(e => <SheetChildRow key={e.id} entry={e} />)}
+        </div>
+      )}
     </div>
   )
 })
@@ -191,7 +246,10 @@ const SessionHistory = memo(function SessionHistory({ log, onEdit, isLive }) {
       </div>
 
       {visible.map(({ date, entries }) => {
-        const dayTotal = entries.reduce((s, e) => s + e.amount, 0)
+        const dayTotal = entries.reduce((s, e) => s + (e.amount || 0), 0)
+        const byStation = {}
+        entries.forEach(e => { (byStation[e.stationIndex] = byStation[e.stationIndex] || []).push(e) })
+        const stationOrder = [1, 2, 0].filter(si => byStation[si])
         return (
           <div key={date} className="card p-0 overflow-hidden">
             <div className="flex items-center justify-between px-4 py-2.5 bg-bg-secondary border-b border-border">
@@ -199,7 +257,9 @@ const SessionHistory = memo(function SessionHistory({ log, onEdit, isLive }) {
               <p className="text-xs font-bold text-text-primary">₹{dayTotal.toLocaleString('en-IN')}</p>
             </div>
             <div className="px-4">
-              {entries.map(e => <LogEntry key={e.id} entry={e} onEdit={onEdit} />)}
+              {stationOrder.map(si => (
+                <StationGroup key={si} stationIndex={si} entries={byStation[si]} onEdit={onEdit} />
+              ))}
             </div>
           </div>
         )

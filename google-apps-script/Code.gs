@@ -522,6 +522,7 @@ function rebuildSessions() {
         durationMins: Number(r[6]) || 0, notes: r[7] || '',
         savedAt: r[8] ? String(r[8]) : dateStr,
         editedAt: r[9] ? String(r[9]) : '',
+        source: 'session', // logged from the app
       })
     }
   }
@@ -544,6 +545,7 @@ function rebuildSessions() {
         id: aggId, date: a.date, station: stationName(a.stationIndex), stationIndex: a.stationIndex,
         amount: amt, players: a.stationIndex === 0 ? 0 : a.customers,
         durationMins: 0, notes: a.notes, savedAt: new Date(a.date + 'T00:00:00').toISOString(),
+        source: 'sheet', // amount entered/changed directly in the Google Sheet
       }
     }
     if (rows && rows.length) {
