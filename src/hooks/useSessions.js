@@ -79,8 +79,16 @@ export function useSessions() {
             changed = true
           }
           if (!cs.isRunning && local.isRunning) {
-            const elapsed = local.accumulatedSecs + Math.floor((Date.now() + clockOffsetRef.current - local.startTime) / 1000)
-            next[cs.id] = { ...local, isRunning: false, startTime: null, accumulatedSecs: elapsed }
+            // The other device wrote the authoritative state — usually a reset to
+            // 0 after saving the session. Adopt its values instead of keeping our
+            // own running elapsed, so the timer actually resets here too.
+            next[cs.id] = {
+              ...local,
+              isRunning: false,
+              startTime: null,
+              accumulatedSecs: cs.accumulatedSecs || 0,
+              lastHourNotified: cs.lastHourNotified || 0,
+            }
             saveSession(cs.id, next[cs.id])
             changed = true
           }
