@@ -1,15 +1,17 @@
 import { useState, useEffect, useCallback, useMemo, memo } from 'react'
-import { Play, Square, Plus, Minus, Zap, Pencil, Gamepad2, Wifi, WifiOff, ChevronDown, ChevronRight, FileSpreadsheet } from 'lucide-react'
+import { Play, Square, Plus, Minus, Zap, Pencil, Gamepad2, Wifi, WifiOff } from 'lucide-react'
 import { useSessions } from '../hooks/useSessions'
+import { useSavingState } from '../hooks/useSavingState'
 import EndSessionModal from '../components/EndSessionModal'
 import EditSessionModal from '../components/EditSessionModal'
 import { useToast } from '../components/Toast'
 import {
-  appendRevenue, loadRevenueLog, updateRevenue, deleteRevenue
+  appendRevenue, loadRevenueLog, updateRevenue, deleteRevenue, getDayStationTotal
 } from '../services/storage'
-import { logSession, updateSessionInSheet, deleteSessionFromSheet } from '../services/sheetsApi'
-import { subscribeSessions, subscribeConnected } from '../services/firebaseDb'
+import { logSession, updateDayRevenue, updateSessionInSheet, deleteSessionFromSheet } from '../services/sheetsApi'
+import { writeSession, updateSessionFb, deleteSessionFb, subscribeSessions, subscribeConnected } from '../services/firebaseDb'
 import { playConfirmBeep, requestNotificationPermission } from '../services/audio'
+import { queueOperation } from '../services/retryQueue'
 
 function formatTime(secs) {
   const h = String(Math.floor(secs / 3600)).padStart(2, '0')
@@ -18,6 +20,14 @@ function formatTime(secs) {
   return `${h}:${m}:${s}`
 }
 
+function formatMins(mins) {
+  if (!mins) return '—'
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+  if (h > 0 && m > 0) return `${h}h ${m}m`
+  if (h > 0) return `${h}h`
+  return `${m}m`
+}
 
 function formatTimeOfDay(isoString) {
   if (!isoString) return ''
@@ -84,100 +94,37 @@ function SessionCard({ session, onStart, onStop, onSetPlayers }) {
   )
 }
 
-const STATION_META = {
-  1: { name: 'PS5 Station 1', color: 'text-accent-blue' },
-  2: { name: 'PS5 Station 2', color: 'text-accent-purple' },
-  0: { name: 'Other', color: 'text-accent-green' },
-}
+// ─── Log Entry Row ─────────────────────────────────────────────────────────────
+const LogEntry = memo(function LogEntry({ entry, onEdit }) {
+  const stationColors = { 1: 'text-accent-blue', 2: 'text-accent-purple', 0: 'text-accent-green' }
+  const color = stationColors[entry.stationIndex] ?? 'text-text-secondary'
 
-// A single app-logged session (child row, editable)
-const SessionChildRow = memo(function SessionChildRow({ entry, onEdit }) {
   return (
-    <div className="flex items-center gap-3 py-2 pl-8">
-      <span className="w-1.5 h-1.5 rounded-full bg-text-muted/50 shrink-0" />
+    <div className="flex items-center gap-3 py-3 border-b border-border last:border-0">
+      <div className="w-8 h-8 rounded-lg bg-bg-secondary flex items-center justify-center shrink-0">
+        <Gamepad2 size={14} className={color} />
+      </div>
       <div className="flex-1 min-w-0">
-        <p className="text-xs text-text-secondary">
-          {formatTimeOfDay(entry.savedAt) || 'Session'}
+        <div className="flex items-center gap-2">
+          <p className={`text-sm font-semibold ${color}`}>{entry.station || `Station ${entry.stationIndex}`}</p>
+          {entry.editedAt && <span className="text-[10px] text-text-muted bg-bg-secondary px-1.5 py-0.5 rounded-full">edited</span>}
+        </div>
+        <p className="text-xs text-text-muted mt-0.5">
+          {formatMins(entry.durationMins)}
           {entry.players ? ` · ${entry.players} ${entry.players === 1 ? 'player' : 'players'}` : ''}
-          {entry.editedAt ? ' · edited' : ''}
+          {entry.savedAt ? ` · ${formatTimeOfDay(entry.savedAt)}` : ''}
         </p>
-        {entry.notes ? <p className="text-[11px] text-text-muted italic truncate">{entry.notes}</p> : null}
+        {entry.notes ? <p className="text-xs text-text-muted italic mt-0.5 truncate">{entry.notes}</p> : null}
       </div>
-      <span className="text-sm font-semibold text-text-primary shrink-0">₹{(entry.amount || 0).toLocaleString('en-IN')}</span>
-      <button
-        onClick={() => onEdit(entry)}
-        className="w-7 h-7 rounded-lg bg-bg-secondary border border-border flex items-center justify-center active:scale-90 shrink-0"
-      >
-        <Pencil size={11} className="text-text-muted" />
-      </button>
-    </div>
-  )
-})
-
-// An amount that was entered/changed directly in the Google Sheet (read-only)
-const SheetChildRow = memo(function SheetChildRow({ entry }) {
-  return (
-    <div className="flex items-center gap-3 py-2 pl-8">
-      <FileSpreadsheet size={12} className="text-accent-green/70 shrink-0" />
-      <div className="flex-1 min-w-0">
-        <p className="text-xs text-text-secondary flex items-center gap-1.5">
-          Sheet total
-          <span className="text-[10px] text-text-muted bg-bg-secondary px-1.5 py-0.5 rounded-full">from sheet</span>
-        </p>
-        <p className="text-[11px] text-text-muted">edit this in the Google Sheet</p>
+      <div className="flex items-center gap-2 shrink-0">
+        <span className="text-sm font-bold text-text-primary">₹{(entry.amount || 0).toLocaleString('en-IN')}</span>
+        <button
+          onClick={() => onEdit(entry)}
+          className="w-7 h-7 rounded-lg bg-bg-secondary border border-border flex items-center justify-center active:scale-90"
+        >
+          <Pencil size={12} className="text-text-muted" />
+        </button>
       </div>
-      <span className="text-sm font-semibold text-text-primary shrink-0">₹{(entry.amount || 0).toLocaleString('en-IN')}</span>
-      <span className="w-7 h-7 shrink-0" />
-    </div>
-  )
-})
-
-// One station for a day: parent shows the station total (always = the sheet
-// cell); children are the individual app sessions + any direct-sheet amount.
-const StationGroup = memo(function StationGroup({ stationIndex, entries, onEdit }) {
-  const [open, setOpen] = useState(true)
-  const meta = STATION_META[stationIndex] || { name: `Station ${stationIndex}`, color: 'text-text-secondary' }
-  const total = entries.reduce((s, e) => s + (e.amount || 0), 0)
-  const sessions = entries.filter(e => e.source !== 'sheet').sort((a, b) => (a.savedAt || '').localeCompare(b.savedAt || ''))
-  const sheetEntries = entries.filter(e => e.source === 'sheet')
-
-  // Pure sheet total (no app sessions) → a single non-expandable row
-  if (sessions.length === 0) {
-    return (
-      <div className="flex items-center gap-3 py-3 border-b border-border last:border-0">
-        <div className="w-8 h-8 rounded-lg bg-bg-secondary flex items-center justify-center shrink-0">
-          <Gamepad2 size={14} className={meta.color} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className={`text-sm font-semibold ${meta.color}`}>{meta.name}</p>
-          <p className="text-[11px] text-text-muted">from Google Sheet</p>
-        </div>
-        <span className="text-sm font-bold text-text-primary shrink-0">₹{total.toLocaleString('en-IN')}</span>
-      </div>
-    )
-  }
-
-  return (
-    <div className="border-b border-border last:border-0">
-      <button onClick={() => setOpen(v => !v)} className="w-full flex items-center gap-2.5 py-3">
-        {open ? <ChevronDown size={15} className="text-text-muted shrink-0" /> : <ChevronRight size={15} className="text-text-muted shrink-0" />}
-        <div className="w-8 h-8 rounded-lg bg-bg-secondary flex items-center justify-center shrink-0">
-          <Gamepad2 size={14} className={meta.color} />
-        </div>
-        <div className="flex-1 min-w-0 text-left">
-          <p className={`text-sm font-semibold ${meta.color}`}>{meta.name}</p>
-          <p className="text-[11px] text-text-muted">
-            {sessions.length} session{sessions.length > 1 ? 's' : ''}{sheetEntries.length ? ' + sheet' : ''}
-          </p>
-        </div>
-        <span className="text-sm font-bold text-text-primary shrink-0">₹{total.toLocaleString('en-IN')}</span>
-      </button>
-      {open && (
-        <div className="pb-1">
-          {sessions.map(e => <SessionChildRow key={e.id} entry={e} onEdit={onEdit} />)}
-          {sheetEntries.map(e => <SheetChildRow key={e.id} entry={e} />)}
-        </div>
-      )}
     </div>
   )
 })
@@ -246,10 +193,7 @@ const SessionHistory = memo(function SessionHistory({ log, onEdit, isLive }) {
       </div>
 
       {visible.map(({ date, entries }) => {
-        const dayTotal = entries.reduce((s, e) => s + (e.amount || 0), 0)
-        const byStation = {}
-        entries.forEach(e => { (byStation[e.stationIndex] = byStation[e.stationIndex] || []).push(e) })
-        const stationOrder = [1, 2, 0].filter(si => byStation[si])
+        const dayTotal = entries.reduce((s, e) => s + e.amount, 0)
         return (
           <div key={date} className="card p-0 overflow-hidden">
             <div className="flex items-center justify-between px-4 py-2.5 bg-bg-secondary border-b border-border">
@@ -257,9 +201,7 @@ const SessionHistory = memo(function SessionHistory({ log, onEdit, isLive }) {
               <p className="text-xs font-bold text-text-primary">₹{dayTotal.toLocaleString('en-IN')}</p>
             </div>
             <div className="px-4">
-              {stationOrder.map(si => (
-                <StationGroup key={si} stationIndex={si} entries={byStation[si]} onEdit={onEdit} />
-              ))}
+              {entries.map(e => <LogEntry key={e.id} entry={e} onEdit={onEdit} />)}
             </div>
           </div>
         )
@@ -271,39 +213,22 @@ const SessionHistory = memo(function SessionHistory({ log, onEdit, isLive }) {
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function Sessions() {
   const { sessions, startSession, stopSession, setPlayers, resetSession } = useSessions()
+  const { isSaving, withSaving } = useSavingState()
   const [endingSession, setEndingSession] = useState(null)
   const [editingEntry, setEditingEntry] = useState(null)
   const [log, setLog] = useState(() => loadRevenueLog())
   const [firebaseSessions, setFirebaseSessions] = useState([])
-  const [fbLoaded, setFbLoaded] = useState(false)
   const [isLive, setIsLive] = useState(false)
-  const [deletingIds, setDeletingIds] = useState({}) // ids removed locally, awaiting sheet round-trip
   const toast = useToast()
 
   useEffect(() => { requestNotificationPermission() }, [])
 
   // Firebase real-time listeners
   useEffect(() => {
-    const unsubSessions = subscribeSessions(data => { setFirebaseSessions(data); setFbLoaded(true) })
+    const unsubSessions = subscribeSessions(data => setFirebaseSessions(data))
     const unsubConnected = subscribeConnected(connected => setIsLive(connected))
     return () => { unsubSessions(); unsubConnected() }
   }, [])
-
-  // Once Firebase confirms a deletion (the id is gone from its data), stop
-  // tracking it. A fallback timer clears it anyway so a failed delete reappears.
-  useEffect(() => {
-    const ids = Object.keys(deletingIds)
-    if (ids.length === 0) return
-    const fbIds = new Set(firebaseSessions.map(s => String(s.id)))
-    const confirmed = ids.filter(id => !fbIds.has(id))
-    if (confirmed.length > 0) {
-      setDeletingIds(prev => {
-        const next = { ...prev }
-        confirmed.forEach(id => delete next[id])
-        return next
-      })
-    }
-  }, [firebaseSessions, deletingIds])
 
   const refreshLog = useCallback(() => setLog(loadRevenueLog()), [])
   const handleEditEntry = useCallback((entry) => setEditingEntry(entry), [])
@@ -315,73 +240,97 @@ export default function Sessions() {
     setEndingSession({ id: stationId })
   }
 
-  const handleConfirmEnd = async ({ amount, players, durationMins, notes }) => {
-    const stationId = endingSession.id
-    const session = sessions.find(s => s.id === stationId)
-    const date = new Date().toLocaleDateString('en-CA')
-    const stationIndex = stationId === 'ps5_1' ? 1 : 2
-    const entry = { date, station: session.name, stationIndex, amount, players, durationMins, notes }
+  const handleConfirmEnd = ({ amount, players, durationMins, notes }) => {
+    withSaving(async () => {
+      const stationId = endingSession.id
+      const session = sessions.find(s => s.id === stationId)
+      const date = new Date().toLocaleDateString('en-CA')
+      const stationIndex = stationId === 'ps5_1' ? 1 : 2
+      const entry = { date, station: session.name, stationIndex, amount, players, durationMins, notes }
 
-    const saved = appendRevenue(entry)
-    refreshLog()
-    playConfirmBeep()
-    toast(`Session saved · ₹${amount.toLocaleString('en-IN')}`, 'success')
-    // Log to the Sheet — the Sheet's onEdit trigger is the single writer to Firebase
-    logSession({ ...saved }).catch(() => {})
-    stopSession(stationId)
-    resetSession(stationId)
-    setEndingSession(null)
+      const saved = appendRevenue(entry)
+      refreshLog()
+      playConfirmBeep()
+      toast(`Session saved · ₹${amount.toLocaleString('en-IN')}`, 'success')
+      // Write to Firebase (real-time) + Sheets (backup)
+      writeSession(saved).catch(err => {
+        queueOperation(() => writeSession(saved), 'writeSession', {})
+      })
+      logSession({ ...saved }).catch(err => {
+        queueOperation(() => logSession({ ...saved }), 'logSession', {})
+      })
+      stopSession(stationId)
+      resetSession(stationId)
+      setEndingSession(null)
+    })
   }
 
   // ── Edit flow ───────────────────────────────────────────────────────────────
   const handleSaveEdit = async (updated) => {
     updateRevenue(updated.id, updated)
     refreshLog()
-    // Update the Sheet — the server recomputes the day's Daily Revenue total from
-    // the Sessions tab (authoritative), so we don't push a local total here.
-    updateSessionInSheet(updated).catch(() => {})
+    // Firebase (real-time) + Sheets (backup)
+    updateSessionFb(updated.id, updated).catch(err => {
+      queueOperation(() => updateSessionFb(updated.id, updated), 'updateSessionFb', {})
+    })
+    updateSessionInSheet(updated).catch(err => {
+      queueOperation(() => updateSessionInSheet(updated), 'updateSessionInSheet', {})
+    })
+    const newTotal = getDayStationTotal(updated.date, updated.stationIndex)
+    updateDayRevenue({ date: updated.date, stationIndex: updated.stationIndex, newTotal }).catch(err => {
+      queueOperation(
+        () => updateDayRevenue({ date: updated.date, stationIndex: updated.stationIndex, newTotal }),
+        'updateDayRevenue',
+        {}
+      )
+    })
+    if (updated.stationIndex !== editingEntry.stationIndex || updated.date !== editingEntry.date) {
+      const origTotal = getDayStationTotal(editingEntry.date, editingEntry.stationIndex)
+      updateDayRevenue({ date: editingEntry.date, stationIndex: editingEntry.stationIndex, newTotal: origTotal }).catch(err => {
+        queueOperation(
+          () => updateDayRevenue({ date: editingEntry.date, stationIndex: editingEntry.stationIndex, newTotal: origTotal }),
+          'updateDayRevenue',
+          {}
+        )
+      })
+    }
     toast('Session updated', 'success')
     setEditingEntry(null)
   }
 
   const handleDelete = async (id) => {
+    const entry = editingEntry
     deleteRevenue(id)
     refreshLog()
-    // Hide it right away (optimistic) — Firebase catches up after the sheet
-    // round-trip. Fallback timer clears the flag so a failed delete reappears.
-    setDeletingIds(prev => ({ ...prev, [String(id)]: true }))
-    setTimeout(() => {
-      setDeletingIds(prev => { const next = { ...prev }; delete next[String(id)]; return next })
-    }, 15000)
-    // Delete from the Sheet — the server recomputes the day's Daily Revenue total
-    // from the remaining sessions, so we don't push a local total here.
-    deleteSessionFromSheet(id).catch(() => {})
+    // Firebase (real-time) + Sheets (backup)
+    deleteSessionFb(id).catch(err => {
+      queueOperation(() => deleteSessionFb(id), 'deleteSessionFb', {})
+    })
+    deleteSessionFromSheet(id).catch(err => {
+      queueOperation(() => deleteSessionFromSheet(id), 'deleteSessionFromSheet', {})
+    })
+    const newTotal = getDayStationTotal(entry.date, entry.stationIndex)
+    updateDayRevenue({ date: entry.date, stationIndex: entry.stationIndex, newTotal }).catch(err => {
+      queueOperation(
+        () => updateDayRevenue({ date: entry.date, stationIndex: entry.stationIndex, newTotal }),
+        'updateDayRevenue',
+        {}
+      )
+    })
     toast('Session deleted', 'success')
     setEditingEntry(null)
   }
 
-  // The Google Sheet (via Firebase) is the source of truth for the log. Firebase
-  // carries each session by its real id, so we merge by id: show every Firebase
-  // entry (this reflects sheet adds, edits AND deletes), plus any local entry
-  // saved in the last 30s that Firebase hasn't caught up on yet — that gives
-  // instant feedback right after ending a session, without duplicating it once
-  // the sheet round-trips, and without ever resurrecting a deleted entry.
+  // Merge local log + Firebase sessions by ID (Firebase fills in cross-device entries)
   const mergedLog = useMemo(() => {
-    const byDate = (a, b) => (b.date || '').localeCompare(a.date || '')
-
-    // Offline or Firebase not ready yet → fall back to the on-device log.
-    if (!fbLoaded) return [...log].sort(byDate)
-
-    const fbIds = new Set(firebaseSessions.map(s => String(s.id)))
-    const now = Date.now()
-    const pendingLocal = log.filter(e => {
-      const t = e.savedAt ? Date.parse(e.savedAt) : 0
-      return (now - t) < 30000 && !fbIds.has(String(e.id))
+    const byId = {}
+    log.forEach(e => { byId[String(e.id)] = e })
+    firebaseSessions.forEach(s => {
+      const key = String(s.id)
+      if (!byId[key]) byId[key] = { ...s, fromCloud: true }
     })
-    return [...firebaseSessions, ...pendingLocal]
-      .filter(e => !deletingIds[String(e.id)]) // hide entries being deleted
-      .sort(byDate)
-  }, [log, firebaseSessions, fbLoaded, deletingIds])
+    return Object.values(byId).sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+  }, [log, firebaseSessions])
 
   const totalActive = sessions.filter(s => s.isRunning).length
   const totalRevenue = sessions.reduce((sum, s) => sum + (s.isRunning ? s.currentCharge : 0), 0)
@@ -428,6 +377,7 @@ export default function Sessions() {
           session={liveEndingSession}
           onConfirm={handleConfirmEnd}
           onCancel={() => setEndingSession(null)}
+          isSaving={isSaving}
         />
       )}
       {editingEntry && (

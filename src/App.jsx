@@ -6,8 +6,11 @@ import AddData from './pages/AddData'
 import AddExpense from './pages/AddExpense'
 import Udhar from './pages/Udhar'
 import Dashboard from './pages/Dashboard'
+import { useRetryOnline } from './hooks/useRetryOnline'
 
 export default function App() {
+  useRetryOnline()
+
   return (
     <ToastProvider>
       <BrowserRouter>

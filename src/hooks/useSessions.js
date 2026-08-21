@@ -3,6 +3,7 @@ import { STATIONS, PRICING } from '../config'
 import { loadSessions, saveSession, clearSession } from '../services/storage'
 import { playHourlyChime, showHourlyNotification } from '../services/audio'
 import { subscribeActiveSessions, pushActiveSessions, subscribeServerOffset } from '../services/firebaseDb'
+import { queueOperation } from '../services/retryQueue'
 
 function calcPrice(elapsedSecs, players) {
   const hours = elapsedSecs / 3600
@@ -56,7 +57,13 @@ export function useSessions() {
           lastHourNotified: s.lastHourNotified,
         }
       })
-      pushActiveSessions(toSync).catch(() => {})
+      pushActiveSessions(toSync).catch(err => {
+        queueOperation(
+          () => pushActiveSessions(toSync),
+          'pushActiveSessions',
+          {}
+        )
+      })
     }, 300)
   }, [])
 

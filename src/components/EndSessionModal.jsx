@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { X, Clock, Users, IndianRupee } from 'lucide-react'
+import { X, Clock, Users, IndianRupee, Loader } from 'lucide-react'
 
 function formatDuration(secs) {
   const h = Math.floor(secs / 3600)
@@ -9,12 +9,13 @@ function formatDuration(secs) {
   return `${m}m ${s}s`
 }
 
-export default function EndSessionModal({ session, onConfirm, onCancel }) {
+export default function EndSessionModal({ session, onConfirm, onCancel, isSaving }) {
   const [amount, setAmount] = useState(String(session.currentCharge))
   const [players, setPlayers] = useState(String(session.players))
   const [notes, setNotes] = useState('')
 
   const handleConfirm = () => {
+    if (isSaving) return
     const parsedAmount = parseInt(amount, 10) || 0
     const parsedPlayers = parseInt(players, 10) || 1
     onConfirm({
@@ -108,9 +109,16 @@ export default function EndSessionModal({ session, onConfirm, onCancel }) {
 
         {/* Actions — always visible at bottom */}
         <div className="flex gap-3 px-6 pt-4 pb-8 shrink-0">
-          <button onClick={onCancel} className="btn-ghost flex-1">Keep Running</button>
-          <button onClick={handleConfirm} className="btn-primary flex-1">
-            Save Session
+          <button onClick={onCancel} disabled={isSaving} className="btn-ghost flex-1">Keep Running</button>
+          <button onClick={handleConfirm} disabled={isSaving} className="btn-primary flex-1 flex items-center justify-center gap-2">
+            {isSaving ? (
+              <>
+                <Loader size={16} className="animate-spin" />
+                Saving...
+              </>
+            ) : (
+              'Save Session'
+            )}
           </button>
         </div>
       </div>

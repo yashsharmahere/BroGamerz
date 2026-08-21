@@ -1,9 +1,11 @@
 import { useState } from 'react'
-import { IndianRupee, Users, StickyNote, Calendar, CheckCircle } from 'lucide-react'
+import { IndianRupee, Users, StickyNote, Calendar, CheckCircle, Loader } from 'lucide-react'
 import { appendRevenue } from '../services/storage'
 import { logManualRevenue } from '../services/sheetsApi'
 import { useToast } from '../components/Toast'
 import { playConfirmBeep } from '../services/audio'
+import { queueOperation } from '../services/retryQueue'
+import { useSavingState } from '../hooks/useSavingState'
 
 export default function AddData() {
   const today = new Date().toLocaleDateString('en-CA')
@@ -13,12 +15,12 @@ export default function AddData() {
     customers: '',
     notes: '',
   })
-  const [saving, setSaving] = useState(false)
   const toast = useToast()
+  const { isSaving, withSaving } = useSavingState()
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
-  const handleSave = async () => {
+  const handleSave = () => {
     const amount = parseInt(form.otherRevenue, 10) || 0
     const customers = parseInt(form.customers, 10) || 0
 
@@ -27,8 +29,7 @@ export default function AddData() {
       return
     }
 
-    setSaving(true)
-    try {
+    withSaving(async () => {
       const saved = appendRevenue({
         date: form.date,
         station: 'Other',
@@ -38,20 +39,27 @@ export default function AddData() {
         notes: form.notes,
       })
       // Log to the Sheet — its onEdit trigger is the single writer to Firebase
+      writeSession(saved).catch(err => {
+        queueOperation(() => writeSession(saved), 'writeSession', {})
+      })
       logManualRevenue({
         id: saved.id,
         date: form.date,
         otherRevenue: amount,
         customers,
         notes: form.notes,
-      }).catch(() => {})
+      }).catch(err => {
+        queueOperation(
+          () => logManualRevenue({ date: form.date, otherRevenue: amount, customers, notes: form.notes }),
+          'logManualRevenue',
+          {}
+        )
+      })
 
       playConfirmBeep()
       toast('Revenue logged successfully', 'success')
       setForm({ date: today, otherRevenue: '', customers: '', notes: '' })
-    } finally {
-      setSaving(false)
-    }
+    })
   }
 
   return (
@@ -138,11 +146,20 @@ export default function AddData() {
 
         <button
           onClick={handleSave}
-          disabled={saving}
+          disabled={isSaving}
           className="btn-primary w-full flex items-center justify-center gap-2"
         >
-          <CheckCircle size={17} />
-          Save Entry
+          {isSaving ? (
+            <>
+              <Loader size={17} className="animate-spin" />
+              Saving...
+            </>
+          ) : (
+            <>
+              <CheckCircle size={17} />
+              Save Entry
+            </>
+          )}
         </button>
       </div>
     </div>
