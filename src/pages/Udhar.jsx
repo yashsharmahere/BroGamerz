@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react'
 import { Plus, Calendar, CheckCircle, IndianRupee, User, Wallet, X, Loader } from 'lucide-react'
 import { appendUdhar, updateUdhar } from '../services/storage'
-import { logUdhar, settleUdhar } from '../services/sheetsApi'
-import { writeUdhar, updateUdharFb, subscribeUdhar } from '../services/firebaseDb'
+import { subscribeUdhar } from '../services/firebaseDb'
 import { useToast } from '../components/Toast'
 import { playConfirmBeep } from '../services/audio'
-import { queueOperation } from '../services/retryQueue'
+import { runOrQueue } from '../services/retryQueue'
 import { useSavingState } from '../hooks/useSavingState'
 
 function AddUdharForm({ onSave, onCancel, isSaving }) {
@@ -161,13 +160,9 @@ export default function Udhar() {
 
   const handleSave = (data) => {
     withSaving(async () => {
-      const saved = appendUdhar(data)           // local cache
-      writeUdhar(saved).catch(err => {          // Firebase (real-time)
-        queueOperation(() => writeUdhar(saved), 'writeUdhar', {})
-      })
-      logUdhar(data).catch(err => {             // Sheets (backup)
-        queueOperation(() => logUdhar(data), 'logUdhar', {})
-      })
+      const saved = appendUdhar(data)              // local cache
+      runOrQueue('writeUdhar', saved)              // Firebase (real-time)
+      runOrQueue('logUdhar', data)                 // Sheets (backup)
       playConfirmBeep()
       toast('Entry saved', 'success')
       setShowForm(false)
@@ -180,14 +175,10 @@ export default function Udhar() {
 
     const updates = { settled: true, settledAt: new Date().toISOString() }
     // Update all layers
-    updateUdhar(id, updates)                          // local cache
-    updateUdharFb(String(id), updates).catch(err => { // Firebase (real-time)
-      queueOperation(() => updateUdharFb(String(id), updates), 'updateUdharFb', {})
-    })
+    updateUdhar(id, updates)                                        // local cache
+    runOrQueue('updateUdharFb', { id: String(id), updates })       // Firebase (real-time)
     const settleData = { customerName: entry.customerName, amount: entry.amount, type: entry.type, date: entry.date }
-    settleUdhar(settleData).catch(err => {            // Sheets (backup)
-      queueOperation(() => settleUdhar(settleData), 'settleUdhar', {})
-    })
+    runOrQueue('settleUdhar', settleData)                          // Sheets (backup)
     toast('Marked as settled', 'success')
   }
 

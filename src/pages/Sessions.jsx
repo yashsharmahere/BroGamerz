@@ -8,10 +8,9 @@ import { useToast } from '../components/Toast'
 import {
   appendRevenue, loadRevenueLog, updateRevenue, deleteRevenue, getDayStationTotal
 } from '../services/storage'
-import { logSession, updateDayRevenue, updateSessionInSheet, deleteSessionFromSheet } from '../services/sheetsApi'
-import { writeSession, subscribeSessions, subscribeConnected } from '../services/firebaseDb'
+import { subscribeSessions, subscribeConnected } from '../services/firebaseDb'
 import { playConfirmBeep, requestNotificationPermission } from '../services/audio'
-import { queueOperation } from '../services/retryQueue'
+import { runOrQueue } from '../services/retryQueue'
 
 function formatTime(secs) {
   const h = String(Math.floor(secs / 3600)).padStart(2, '0')
@@ -252,13 +251,9 @@ export default function Sessions() {
       refreshLog()
       playConfirmBeep()
       toast(`Session saved · ₹${amount.toLocaleString('en-IN')}`, 'success')
-      // Write to Firebase (real-time) + Sheets (backup)
-      writeSession(saved).catch(err => {
-        queueOperation(() => writeSession(saved), 'writeSession', {})
-      })
-      logSession({ ...saved }).catch(err => {
-        queueOperation(() => logSession({ ...saved }), 'logSession', {})
-      })
+      // Write to Firebase (real-time) + Sheets (backup) — each queues on failure
+      runOrQueue('writeSession', saved)
+      runOrQueue('logSession', { ...saved })
       stopSession(stationId)
       resetSession(stationId)
       setEndingSession(null)
@@ -270,26 +265,12 @@ export default function Sessions() {
     updateRevenue(updated.id, updated)
     refreshLog()
     // Sheet's onEdit trigger is the single writer to Firebase
-    updateSessionInSheet(updated).catch(err => {
-      queueOperation(() => updateSessionInSheet(updated), 'updateSessionInSheet', {})
-    })
+    runOrQueue('updateSessionInSheet', updated)
     const newTotal = getDayStationTotal(updated.date, updated.stationIndex)
-    updateDayRevenue({ date: updated.date, stationIndex: updated.stationIndex, newTotal }).catch(err => {
-      queueOperation(
-        () => updateDayRevenue({ date: updated.date, stationIndex: updated.stationIndex, newTotal }),
-        'updateDayRevenue',
-        {}
-      )
-    })
+    runOrQueue('updateDayRevenue', { date: updated.date, stationIndex: updated.stationIndex, newTotal })
     if (updated.stationIndex !== editingEntry.stationIndex || updated.date !== editingEntry.date) {
       const origTotal = getDayStationTotal(editingEntry.date, editingEntry.stationIndex)
-      updateDayRevenue({ date: editingEntry.date, stationIndex: editingEntry.stationIndex, newTotal: origTotal }).catch(err => {
-        queueOperation(
-          () => updateDayRevenue({ date: editingEntry.date, stationIndex: editingEntry.stationIndex, newTotal: origTotal }),
-          'updateDayRevenue',
-          {}
-        )
-      })
+      runOrQueue('updateDayRevenue', { date: editingEntry.date, stationIndex: editingEntry.stationIndex, newTotal: origTotal })
     }
     toast('Session updated', 'success')
     setEditingEntry(null)
@@ -300,17 +281,9 @@ export default function Sessions() {
     deleteRevenue(id)
     refreshLog()
     // Sheet's onEdit trigger is the single writer to Firebase
-    deleteSessionFromSheet(id).catch(err => {
-      queueOperation(() => deleteSessionFromSheet(id), 'deleteSessionFromSheet', {})
-    })
+    runOrQueue('deleteSessionFromSheet', { id })
     const newTotal = getDayStationTotal(entry.date, entry.stationIndex)
-    updateDayRevenue({ date: entry.date, stationIndex: entry.stationIndex, newTotal }).catch(err => {
-      queueOperation(
-        () => updateDayRevenue({ date: entry.date, stationIndex: entry.stationIndex, newTotal }),
-        'updateDayRevenue',
-        {}
-      )
-    })
+    runOrQueue('updateDayRevenue', { date: entry.date, stationIndex: entry.stationIndex, newTotal })
     toast('Session deleted', 'success')
     setEditingEntry(null)
   }

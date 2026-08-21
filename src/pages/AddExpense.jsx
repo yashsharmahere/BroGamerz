@@ -1,11 +1,9 @@
 import { useState } from 'react'
 import { IndianRupee, Calendar, CheckCircle, ChevronDown, ChevronUp, Receipt, Loader } from 'lucide-react'
 import { appendExpense, loadExpenseLog } from '../services/storage'
-import { logExpense } from '../services/sheetsApi'
-import { writeExpense } from '../services/firebaseDb'
 import { useToast } from '../components/Toast'
 import { playConfirmBeep } from '../services/audio'
-import { queueOperation } from '../services/retryQueue'
+import { runOrQueue } from '../services/retryQueue'
 import { useSavingState } from '../hooks/useSavingState'
 import { EXPENSE_CATEGORIES, PAYMENT_METHODS, OWNERS } from '../config'
 
@@ -59,12 +57,8 @@ export default function AddExpense() {
         amount: parseInt(form.amount, 10),
       }
       const saved = appendExpense(entry)
-      writeExpense(saved).catch(err => {
-        queueOperation(() => writeExpense(saved), 'writeExpense', {})
-      })
-      logExpense(entry).catch(err => {
-        queueOperation(() => logExpense(entry), 'logExpense', {})
-      })
+      runOrQueue('writeExpense', saved)
+      runOrQueue('logExpense', entry)
       setLog([...loadExpenseLog()].reverse())
 
       playConfirmBeep()

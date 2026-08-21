@@ -1,10 +1,9 @@
 import { useState } from 'react'
 import { IndianRupee, Users, StickyNote, Calendar, CheckCircle, Loader } from 'lucide-react'
 import { appendRevenue } from '../services/storage'
-import { logManualRevenue } from '../services/sheetsApi'
 import { useToast } from '../components/Toast'
 import { playConfirmBeep } from '../services/audio'
-import { queueOperation } from '../services/retryQueue'
+import { runOrQueue } from '../services/retryQueue'
 import { useSavingState } from '../hooks/useSavingState'
 
 export default function AddData() {
@@ -38,23 +37,9 @@ export default function AddData() {
         players: customers,
         notes: form.notes,
       })
-      // Log to the Sheet — its onEdit trigger is the single writer to Firebase
-      writeSession(saved).catch(err => {
-        queueOperation(() => writeSession(saved), 'writeSession', {})
-      })
-      logManualRevenue({
-        id: saved.id,
-        date: form.date,
-        otherRevenue: amount,
-        customers,
-        notes: form.notes,
-      }).catch(err => {
-        queueOperation(
-          () => logManualRevenue({ date: form.date, otherRevenue: amount, customers, notes: form.notes }),
-          'logManualRevenue',
-          {}
-        )
-      })
+      // Log to the Sheet — its onEdit trigger is the single writer to Firebase.
+      // Queues automatically if the write fails (offline / server error).
+      runOrQueue('logManualRevenue', { id: saved.id, date: form.date, otherRevenue: amount, customers, notes: form.notes })
 
       playConfirmBeep()
       toast('Revenue logged successfully', 'success')
