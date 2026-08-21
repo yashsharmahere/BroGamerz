@@ -16,7 +16,10 @@ import {
 } from './firebaseDb'
 
 const QUEUE_KEY = 'bg_retry_queue'
-const MAX_RETRIES = 5
+// Generous cap so a genuine but transient outage (server down for a while) keeps
+// retrying instead of dropping real data. Structurally-broken entries (unknown
+// op / missing payload) are dropped immediately below, not via this counter.
+const MAX_RETRIES = 50
 
 // Each handler takes a single JSON-serializable payload and performs the write.
 // The same handler is used for both the live attempt and every later retry, so
@@ -97,29 +100,40 @@ export async function runOrQueue(operationName, payload) {
   }
 }
 
+let retrying = false // guard against overlapping runs (interval + online event)
+
 export async function retryAll() {
+  if (retrying) return
   const queue = loadQueue()
   if (queue.length === 0) return
 
+  retrying = true
   const stillFailed = []
 
-  for (const item of queue) {
-    const handler = HANDLERS[item.operationName]
-    if (!handler) continue // unknown op from an older build — drop it
+  try {
+    for (const item of queue) {
+      const handler = HANDLERS[item.operationName]
+      // Drop entries that can NEVER succeed: an operation name this build no
+      // longer knows, or a missing payload (e.g. a legacy entry from an older
+      // build that stored the op as a function, which JSON dropped). Keeping
+      // these would show a permanent "waiting to sync" that never clears.
+      if (!handler || item.payload == null) continue
 
-    try {
-      const result = await handler(item.payload)
-      if (failed(result)) {
+      try {
+        const result = await handler(item.payload)
+        if (failed(result)) {
+          item.retries++
+          if (item.retries < MAX_RETRIES) stillFailed.push(item)
+        }
+      } catch (err) {
         item.retries++
         if (item.retries < MAX_RETRIES) stillFailed.push(item)
       }
-    } catch (err) {
-      item.retries++
-      if (item.retries < MAX_RETRIES) stillFailed.push(item)
     }
+    saveQueue(stillFailed)
+  } finally {
+    retrying = false
   }
-
-  saveQueue(stillFailed)
 }
 
 export function getQueueSize() {
