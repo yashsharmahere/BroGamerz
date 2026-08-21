@@ -2,34 +2,48 @@ import { APPS_SCRIPT_URL } from '../config'
 
 const isConfigured = () => Boolean(APPS_SCRIPT_URL)
 
+// callScript / getFromScript THROW on failure (network error, non-2xx HTTP, or
+// unparseable body) rather than resolving with { ok:false }. Swallowing errors
+// into a resolved value is what let failed writes vanish silently: a `.catch()`
+// never fires for a resolved promise. Throwing forces every caller to handle
+// failure — via runOrQueue (queues for retry) or an explicit try/catch. On
+// success both return { ok:true, data }.
 async function callScript(payload) {
-  if (!isConfigured()) return { ok: false, reason: 'not_configured' }
+  if (!isConfigured()) throw new Error('Sheets API not configured')
+  let res
   try {
-    const res = await fetch(APPS_SCRIPT_URL, {
+    res = await fetch(APPS_SCRIPT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: JSON.stringify(payload),
     })
-    const data = await res.json()
-    return { ok: true, data }
   } catch (err) {
-    console.error('Sheets API error:', err)
-    return { ok: false, reason: 'network_error' }
+    throw new Error(`Sheets request failed (${payload.action}): ${err.message}`)
+  }
+  if (!res.ok) throw new Error(`Sheets request failed (${payload.action}): HTTP ${res.status}`)
+  try {
+    return { ok: true, data: await res.json() }
+  } catch (err) {
+    throw new Error(`Sheets response not JSON (${payload.action}): ${err.message}`)
   }
 }
 
 async function getFromScript(params) {
-  if (!isConfigured()) return { ok: false, reason: 'not_configured' }
+  if (!isConfigured()) throw new Error('Sheets API not configured')
+  const url = new URL(APPS_SCRIPT_URL)
+  Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null) url.searchParams.set(k, v) })
+  url.searchParams.set('_t', Date.now()) // bust cache
+  let res
   try {
-    const url = new URL(APPS_SCRIPT_URL)
-    Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null) url.searchParams.set(k, v) })
-    url.searchParams.set('_t', Date.now()) // bust cache
-    const res = await fetch(url.toString(), { cache: 'no-store' })
-    const data = await res.json()
-    return { ok: true, data }
+    res = await fetch(url.toString(), { cache: 'no-store' })
   } catch (err) {
-    console.error('Sheets API error:', err)
-    return { ok: false, reason: 'network_error' }
+    throw new Error(`Sheets request failed (${params.action}): ${err.message}`)
+  }
+  if (!res.ok) throw new Error(`Sheets request failed (${params.action}): HTTP ${res.status}`)
+  try {
+    return { ok: true, data: await res.json() }
+  } catch (err) {
+    throw new Error(`Sheets response not JSON (${params.action}): ${err.message}`)
   }
 }
 
