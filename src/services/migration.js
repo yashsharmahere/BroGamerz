@@ -33,6 +33,10 @@ export async function migrateFromSheets(onProgress) {
         }).catch(e => results.errors.push(`session ${s.id}: ${e.message}`))
       ))
       results.sessions += sessions.length
+    } else if (!res.ok) {
+      // getFromScript swallows network errors into { ok:false } instead of
+      // throwing, so without this a failed fetch would look like an empty import.
+      results.errors.push(`sessions fetch failed: ${res.reason || 'unknown'}`)
     }
   } catch (e) {
     results.errors.push(`sessions fetch: ${e.message}`)
@@ -94,6 +98,8 @@ export async function migrateFromSheets(onProgress) {
       })
       await Promise.all(writes)
       results.sessions += writes.length
+    } else if (!res.ok) {
+      results.errors.push(`daily revenue fetch failed: ${res.reason || 'unknown'}`)
     }
   } catch (e) {
     results.errors.push(`daily revenue fetch: ${e.message}`)
@@ -121,6 +127,8 @@ export async function migrateFromSheets(onProgress) {
         }).catch(err => results.errors.push(`expense row ${e.rowIndex}: ${err.message}`))
       ))
       results.expenses = expenses.length
+    } else if (!res.ok) {
+      results.errors.push(`expenses fetch failed: ${res.reason || 'unknown'}`)
     }
   } catch (e) {
     results.errors.push(`expenses fetch: ${e.message}`)
@@ -147,6 +155,8 @@ export async function migrateFromSheets(onProgress) {
         }).catch(err => results.errors.push(`udhar row ${e.rowIndex}: ${err.message}`))
       ))
       results.udhar = entries.length
+    } else if (!res.ok) {
+      results.errors.push(`udhar fetch failed: ${res.reason || 'unknown'}`)
     }
   } catch (e) {
     results.errors.push(`udhar fetch: ${e.message}`)
