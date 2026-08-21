@@ -62,7 +62,12 @@ export default function AddExpense() {
       setLog([...loadExpenseLog()].reverse())
 
       playConfirmBeep()
-      toast(`Expense saved · ₹${parseInt(form.amount).toLocaleString('en-IN')}`, 'success')
+      const amt = parseInt(form.amount).toLocaleString('en-IN')
+      if (navigator.onLine) {
+        toast(`Expense saved · ₹${amt}`, 'success')
+      } else {
+        toast(`Saved offline · ₹${amt} — will sync when you reconnect`, 'warning')
+      }
       setForm({ date: today, paidBy: 'Yash', category: 'Miscellaneous', description: '', amount: '', paymentMethod: 'UPI', recurring: 'One-time', notes: '' })
     })
   }

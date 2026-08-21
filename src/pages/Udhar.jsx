@@ -164,7 +164,10 @@ export default function Udhar() {
       runOrQueue('writeUdhar', saved)              // Firebase (real-time)
       runOrQueue('logUdhar', data)                 // Sheets (backup)
       playConfirmBeep()
-      toast('Entry saved', 'success')
+      toast(
+        navigator.onLine ? 'Entry saved' : 'Saved offline · will sync when you reconnect',
+        navigator.onLine ? 'success' : 'warning'
+      )
       setShowForm(false)
     })
   }
@@ -179,7 +182,10 @@ export default function Udhar() {
     runOrQueue('updateUdharFb', { id: String(id), updates })       // Firebase (real-time)
     const settleData = { customerName: entry.customerName, amount: entry.amount, type: entry.type, date: entry.date }
     runOrQueue('settleUdhar', settleData)                          // Sheets (backup)
-    toast('Marked as settled', 'success')
+    toast(
+      navigator.onLine ? 'Marked as settled' : 'Settled offline · will sync when you reconnect',
+      navigator.onLine ? 'success' : 'warning'
+    )
   }
 
   const sorted = [...entries].sort((a, b) => (b.date || '').localeCompare(a.date || ''))

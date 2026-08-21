@@ -250,7 +250,11 @@ export default function Sessions() {
       const saved = appendRevenue(entry)
       refreshLog()
       playConfirmBeep()
-      toast(`Session saved · ₹${amount.toLocaleString('en-IN')}`, 'success')
+      if (navigator.onLine) {
+        toast(`Session saved · ₹${amount.toLocaleString('en-IN')}`, 'success')
+      } else {
+        toast(`Saved offline · ₹${amount.toLocaleString('en-IN')} — will sync when you reconnect`, 'warning')
+      }
       // Write to Firebase (real-time) + Sheets (backup) — each queues on failure
       runOrQueue('writeSession', saved)
       runOrQueue('logSession', { ...saved })

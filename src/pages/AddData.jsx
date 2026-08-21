@@ -42,7 +42,10 @@ export default function AddData() {
       runOrQueue('logManualRevenue', { id: saved.id, date: form.date, otherRevenue: amount, customers, notes: form.notes })
 
       playConfirmBeep()
-      toast('Revenue logged successfully', 'success')
+      toast(
+        navigator.onLine ? 'Revenue logged successfully' : 'Saved offline · will sync when you reconnect',
+        navigator.onLine ? 'success' : 'warning'
+      )
       setForm({ date: today, otherRevenue: '', customers: '', notes: '' })
     })
   }
