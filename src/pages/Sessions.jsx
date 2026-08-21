@@ -9,7 +9,7 @@ import {
   appendRevenue, loadRevenueLog, updateRevenue, deleteRevenue, getDayStationTotal
 } from '../services/storage'
 import { logSession, updateDayRevenue, updateSessionInSheet, deleteSessionFromSheet } from '../services/sheetsApi'
-import { writeSession, updateSessionFb, deleteSessionFb, subscribeSessions, subscribeConnected } from '../services/firebaseDb'
+import { writeSession, subscribeSessions, subscribeConnected } from '../services/firebaseDb'
 import { playConfirmBeep, requestNotificationPermission } from '../services/audio'
 import { queueOperation } from '../services/retryQueue'
 
@@ -269,10 +269,7 @@ export default function Sessions() {
   const handleSaveEdit = async (updated) => {
     updateRevenue(updated.id, updated)
     refreshLog()
-    // Firebase (real-time) + Sheets (backup)
-    updateSessionFb(updated.id, updated).catch(err => {
-      queueOperation(() => updateSessionFb(updated.id, updated), 'updateSessionFb', {})
-    })
+    // Sheet's onEdit trigger is the single writer to Firebase
     updateSessionInSheet(updated).catch(err => {
       queueOperation(() => updateSessionInSheet(updated), 'updateSessionInSheet', {})
     })
@@ -302,10 +299,7 @@ export default function Sessions() {
     const entry = editingEntry
     deleteRevenue(id)
     refreshLog()
-    // Firebase (real-time) + Sheets (backup)
-    deleteSessionFb(id).catch(err => {
-      queueOperation(() => deleteSessionFb(id), 'deleteSessionFb', {})
-    })
+    // Sheet's onEdit trigger is the single writer to Firebase
     deleteSessionFromSheet(id).catch(err => {
       queueOperation(() => deleteSessionFromSheet(id), 'deleteSessionFromSheet', {})
     })
