@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, memo } from 'react'
 import { Play, Square, Plus, Minus, Zap, Pencil, Gamepad2, Wifi, WifiOff } from 'lucide-react'
 import { useSessions } from '../hooks/useSessions'
+import { useSavingState } from '../hooks/useSavingState'
 import EndSessionModal from '../components/EndSessionModal'
 import EditSessionModal from '../components/EditSessionModal'
 import { useToast } from '../components/Toast'
@@ -212,6 +213,7 @@ const SessionHistory = memo(function SessionHistory({ log, onEdit, isLive }) {
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function Sessions() {
   const { sessions, startSession, stopSession, setPlayers, resetSession } = useSessions()
+  const { isSaving, withSaving } = useSavingState()
   const [endingSession, setEndingSession] = useState(null)
   const [editingEntry, setEditingEntry] = useState(null)
   const [log, setLog] = useState(() => loadRevenueLog())
@@ -238,27 +240,29 @@ export default function Sessions() {
     setEndingSession({ id: stationId })
   }
 
-  const handleConfirmEnd = async ({ amount, players, durationMins, notes }) => {
-    const stationId = endingSession.id
-    const session = sessions.find(s => s.id === stationId)
-    const date = new Date().toLocaleDateString('en-CA')
-    const stationIndex = stationId === 'ps5_1' ? 1 : 2
-    const entry = { date, station: session.name, stationIndex, amount, players, durationMins, notes }
+  const handleConfirmEnd = ({ amount, players, durationMins, notes }) => {
+    withSaving(async () => {
+      const stationId = endingSession.id
+      const session = sessions.find(s => s.id === stationId)
+      const date = new Date().toLocaleDateString('en-CA')
+      const stationIndex = stationId === 'ps5_1' ? 1 : 2
+      const entry = { date, station: session.name, stationIndex, amount, players, durationMins, notes }
 
-    const saved = appendRevenue(entry)
-    refreshLog()
-    playConfirmBeep()
-    toast(`Session saved · ₹${amount.toLocaleString('en-IN')}`, 'success')
-    // Write to Firebase (real-time) + Sheets (backup)
-    writeSession(saved).catch(err => {
-      queueOperation(() => writeSession(saved), 'writeSession', {})
+      const saved = appendRevenue(entry)
+      refreshLog()
+      playConfirmBeep()
+      toast(`Session saved · ₹${amount.toLocaleString('en-IN')}`, 'success')
+      // Write to Firebase (real-time) + Sheets (backup)
+      writeSession(saved).catch(err => {
+        queueOperation(() => writeSession(saved), 'writeSession', {})
+      })
+      logSession({ ...saved }).catch(err => {
+        queueOperation(() => logSession({ ...saved }), 'logSession', {})
+      })
+      stopSession(stationId)
+      resetSession(stationId)
+      setEndingSession(null)
     })
-    logSession({ ...saved }).catch(err => {
-      queueOperation(() => logSession({ ...saved }), 'logSession', {})
-    })
-    stopSession(stationId)
-    resetSession(stationId)
-    setEndingSession(null)
   }
 
   // ── Edit flow ───────────────────────────────────────────────────────────────
@@ -373,6 +377,7 @@ export default function Sessions() {
           session={liveEndingSession}
           onConfirm={handleConfirmEnd}
           onCancel={() => setEndingSession(null)}
+          isSaving={isSaving}
         />
       )}
       {editingEntry && (

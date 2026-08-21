@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { IndianRupee, Calendar, CheckCircle, ChevronDown, ChevronUp, Receipt } from 'lucide-react'
+import { IndianRupee, Calendar, CheckCircle, ChevronDown, ChevronUp, Receipt, Loader } from 'lucide-react'
 import { appendExpense, loadExpenseLog } from '../services/storage'
 import { logExpense } from '../services/sheetsApi'
 import { writeExpense } from '../services/firebaseDb'
 import { useToast } from '../components/Toast'
 import { playConfirmBeep } from '../services/audio'
 import { queueOperation } from '../services/retryQueue'
+import { useSavingState } from '../hooks/useSavingState'
 import { EXPENSE_CATEGORIES, PAYMENT_METHODS, OWNERS } from '../config'
 
 function ToggleGroup({ options, value, onChange, colorActive = 'bg-accent-blue text-white' }) {
@@ -41,19 +42,18 @@ export default function AddExpense() {
     recurring: 'One-time',
     notes: '',
   })
-  const [saving, setSaving] = useState(false)
   const toast = useToast()
+  const { isSaving, withSaving } = useSavingState()
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
-  const handleSave = async () => {
+  const handleSave = () => {
     if (!form.amount || parseInt(form.amount, 10) <= 0 || !form.description.trim()) {
       toast('Amount and description are required', 'warning')
       return
     }
 
-    setSaving(true)
-    try {
+    withSaving(async () => {
       const entry = {
         ...form,
         amount: parseInt(form.amount, 10),
@@ -70,9 +70,7 @@ export default function AddExpense() {
       playConfirmBeep()
       toast(`Expense saved · ₹${parseInt(form.amount).toLocaleString('en-IN')}`, 'success')
       setForm({ date: today, paidBy: 'Yash', category: 'Miscellaneous', description: '', amount: '', paymentMethod: 'UPI', recurring: 'One-time', notes: '' })
-    } finally {
-      setSaving(false)
-    }
+    })
   }
 
   return (
@@ -180,9 +178,18 @@ export default function AddExpense() {
           />
         </div>
 
-        <button onClick={handleSave} disabled={saving} className="btn-primary w-full flex items-center justify-center gap-2">
-          <CheckCircle size={17} />
-          Save Expense
+        <button onClick={handleSave} disabled={isSaving} className="btn-primary w-full flex items-center justify-center gap-2">
+          {isSaving ? (
+            <>
+              <Loader size={17} className="animate-spin" />
+              Saving...
+            </>
+          ) : (
+            <>
+              <CheckCircle size={17} />
+              Save Expense
+            </>
+          )}
         </button>
 
         {/* Expense History */}

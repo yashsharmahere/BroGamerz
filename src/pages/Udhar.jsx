@@ -1,19 +1,21 @@
 import { useState, useEffect } from 'react'
-import { Plus, Calendar, CheckCircle, IndianRupee, User, Wallet, X } from 'lucide-react'
+import { Plus, Calendar, CheckCircle, IndianRupee, User, Wallet, X, Loader } from 'lucide-react'
 import { appendUdhar, updateUdhar } from '../services/storage'
 import { logUdhar, settleUdhar } from '../services/sheetsApi'
 import { writeUdhar, updateUdharFb, subscribeUdhar } from '../services/firebaseDb'
 import { useToast } from '../components/Toast'
 import { playConfirmBeep } from '../services/audio'
 import { queueOperation } from '../services/retryQueue'
+import { useSavingState } from '../hooks/useSavingState'
 
-function AddUdharForm({ onSave, onCancel }) {
+function AddUdharForm({ onSave, onCancel, isSaving }) {
   const today = new Date().toLocaleDateString('en-CA')
   const [form, setForm] = useState({ customerName: '', amount: '', type: 'udhar', date: today, notes: '' })
   const toast = useToast()
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const handleSave = () => {
+    if (isSaving) return
     if (!form.customerName.trim() || !form.amount) {
       toast('Customer name and amount are required', 'warning')
       return
@@ -82,9 +84,19 @@ function AddUdharForm({ onSave, onCancel }) {
           </div>
 
           <div className="flex gap-3 pt-1">
-            <button onClick={onCancel} className="btn-ghost flex-1">Cancel</button>
-            <button onClick={handleSave} className="btn-primary flex-1 flex items-center justify-center gap-2">
-              <CheckCircle size={16} />Save
+            <button onClick={onCancel} disabled={isSaving} className="btn-ghost flex-1">Cancel</button>
+            <button onClick={handleSave} disabled={isSaving} className="btn-primary flex-1 flex items-center justify-center gap-2">
+              {isSaving ? (
+                <>
+                  <Loader size={16} className="animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <CheckCircle size={16} />
+                  Save
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -139,6 +151,7 @@ export default function Udhar() {
   const [showForm, setShowForm] = useState(false)
   const [entries, setEntries] = useState([])
   const toast = useToast()
+  const { isSaving, withSaving } = useSavingState()
 
   // Firebase real-time listener — single source of truth
   useEffect(() => {
@@ -147,16 +160,18 @@ export default function Udhar() {
   }, [])
 
   const handleSave = (data) => {
-    const saved = appendUdhar(data)           // local cache
-    writeUdhar(saved).catch(err => {          // Firebase (real-time)
-      queueOperation(() => writeUdhar(saved), 'writeUdhar', {})
+    withSaving(async () => {
+      const saved = appendUdhar(data)           // local cache
+      writeUdhar(saved).catch(err => {          // Firebase (real-time)
+        queueOperation(() => writeUdhar(saved), 'writeUdhar', {})
+      })
+      logUdhar(data).catch(err => {             // Sheets (backup)
+        queueOperation(() => logUdhar(data), 'logUdhar', {})
+      })
+      playConfirmBeep()
+      toast('Entry saved', 'success')
+      setShowForm(false)
     })
-    logUdhar(data).catch(err => {             // Sheets (backup)
-      queueOperation(() => logUdhar(data), 'logUdhar', {})
-    })
-    playConfirmBeep()
-    toast('Entry saved', 'success')
-    setShowForm(false)
   }
 
   const handleSettle = (id) => {
@@ -235,7 +250,7 @@ export default function Udhar() {
         )}
       </div>
 
-      {showForm && <AddUdharForm onSave={handleSave} onCancel={() => setShowForm(false)} />}
+      {showForm && <AddUdharForm onSave={handleSave} onCancel={() => setShowForm(false)} isSaving={isSaving} />}
     </div>
   )
 }
