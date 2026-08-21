@@ -10,6 +10,7 @@ import {
 import { logSession, updateDayRevenue, updateSessionInSheet, deleteSessionFromSheet } from '../services/sheetsApi'
 import { writeSession, updateSessionFb, deleteSessionFb, subscribeSessions, subscribeConnected } from '../services/firebaseDb'
 import { playConfirmBeep, requestNotificationPermission } from '../services/audio'
+import { queueOperation } from '../services/retryQueue'
 
 function formatTime(secs) {
   const h = String(Math.floor(secs / 3600)).padStart(2, '0')
@@ -249,8 +250,12 @@ export default function Sessions() {
     playConfirmBeep()
     toast(`Session saved · ₹${amount.toLocaleString('en-IN')}`, 'success')
     // Write to Firebase (real-time) + Sheets (backup)
-    writeSession(saved).catch(() => {})
-    logSession({ ...saved }).catch(() => {})
+    writeSession(saved).catch(err => {
+      queueOperation(() => writeSession(saved), 'writeSession', {})
+    })
+    logSession({ ...saved }).catch(err => {
+      queueOperation(() => logSession({ ...saved }), 'logSession', {})
+    })
     stopSession(stationId)
     resetSession(stationId)
     setEndingSession(null)
@@ -261,13 +266,29 @@ export default function Sessions() {
     updateRevenue(updated.id, updated)
     refreshLog()
     // Firebase (real-time) + Sheets (backup)
-    updateSessionFb(updated.id, updated).catch(() => {})
-    updateSessionInSheet(updated).catch(() => {})
+    updateSessionFb(updated.id, updated).catch(err => {
+      queueOperation(() => updateSessionFb(updated.id, updated), 'updateSessionFb', {})
+    })
+    updateSessionInSheet(updated).catch(err => {
+      queueOperation(() => updateSessionInSheet(updated), 'updateSessionInSheet', {})
+    })
     const newTotal = getDayStationTotal(updated.date, updated.stationIndex)
-    updateDayRevenue({ date: updated.date, stationIndex: updated.stationIndex, newTotal }).catch(() => {})
+    updateDayRevenue({ date: updated.date, stationIndex: updated.stationIndex, newTotal }).catch(err => {
+      queueOperation(
+        () => updateDayRevenue({ date: updated.date, stationIndex: updated.stationIndex, newTotal }),
+        'updateDayRevenue',
+        {}
+      )
+    })
     if (updated.stationIndex !== editingEntry.stationIndex || updated.date !== editingEntry.date) {
       const origTotal = getDayStationTotal(editingEntry.date, editingEntry.stationIndex)
-      updateDayRevenue({ date: editingEntry.date, stationIndex: editingEntry.stationIndex, newTotal: origTotal }).catch(() => {})
+      updateDayRevenue({ date: editingEntry.date, stationIndex: editingEntry.stationIndex, newTotal: origTotal }).catch(err => {
+        queueOperation(
+          () => updateDayRevenue({ date: editingEntry.date, stationIndex: editingEntry.stationIndex, newTotal: origTotal }),
+          'updateDayRevenue',
+          {}
+        )
+      })
     }
     toast('Session updated', 'success')
     setEditingEntry(null)
@@ -278,10 +299,20 @@ export default function Sessions() {
     deleteRevenue(id)
     refreshLog()
     // Firebase (real-time) + Sheets (backup)
-    deleteSessionFb(id).catch(() => {})
-    deleteSessionFromSheet(id).catch(() => {})
+    deleteSessionFb(id).catch(err => {
+      queueOperation(() => deleteSessionFb(id), 'deleteSessionFb', {})
+    })
+    deleteSessionFromSheet(id).catch(err => {
+      queueOperation(() => deleteSessionFromSheet(id), 'deleteSessionFromSheet', {})
+    })
     const newTotal = getDayStationTotal(entry.date, entry.stationIndex)
-    updateDayRevenue({ date: entry.date, stationIndex: entry.stationIndex, newTotal }).catch(() => {})
+    updateDayRevenue({ date: entry.date, stationIndex: entry.stationIndex, newTotal }).catch(err => {
+      queueOperation(
+        () => updateDayRevenue({ date: entry.date, stationIndex: entry.stationIndex, newTotal }),
+        'updateDayRevenue',
+        {}
+      )
+    })
     toast('Session deleted', 'success')
     setEditingEntry(null)
   }

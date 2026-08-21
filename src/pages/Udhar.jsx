@@ -5,6 +5,7 @@ import { logUdhar, settleUdhar } from '../services/sheetsApi'
 import { writeUdhar, updateUdharFb, subscribeUdhar } from '../services/firebaseDb'
 import { useToast } from '../components/Toast'
 import { playConfirmBeep } from '../services/audio'
+import { queueOperation } from '../services/retryQueue'
 
 function AddUdharForm({ onSave, onCancel }) {
   const today = new Date().toLocaleDateString('en-CA')
@@ -147,8 +148,12 @@ export default function Udhar() {
 
   const handleSave = (data) => {
     const saved = appendUdhar(data)           // local cache
-    writeUdhar(saved).catch(() => {})         // Firebase (real-time)
-    logUdhar(data).catch(() => {})            // Sheets (backup)
+    writeUdhar(saved).catch(err => {          // Firebase (real-time)
+      queueOperation(() => writeUdhar(saved), 'writeUdhar', {})
+    })
+    logUdhar(data).catch(err => {             // Sheets (backup)
+      queueOperation(() => logUdhar(data), 'logUdhar', {})
+    })
     playConfirmBeep()
     toast('Entry saved', 'success')
     setShowForm(false)
@@ -161,8 +166,13 @@ export default function Udhar() {
     const updates = { settled: true, settledAt: new Date().toISOString() }
     // Update all layers
     updateUdhar(id, updates)                          // local cache
-    updateUdharFb(String(id), updates).catch(() => {}) // Firebase (real-time)
-    settleUdhar({ customerName: entry.customerName, amount: entry.amount, type: entry.type, date: entry.date }).catch(() => {}) // Sheets (backup)
+    updateUdharFb(String(id), updates).catch(err => { // Firebase (real-time)
+      queueOperation(() => updateUdharFb(String(id), updates), 'updateUdharFb', {})
+    })
+    const settleData = { customerName: entry.customerName, amount: entry.amount, type: entry.type, date: entry.date }
+    settleUdhar(settleData).catch(err => {            // Sheets (backup)
+      queueOperation(() => settleUdhar(settleData), 'settleUdhar', {})
+    })
     toast('Marked as settled', 'success')
   }
 

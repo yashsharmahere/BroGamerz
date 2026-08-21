@@ -5,6 +5,7 @@ import { logExpense } from '../services/sheetsApi'
 import { writeExpense } from '../services/firebaseDb'
 import { useToast } from '../components/Toast'
 import { playConfirmBeep } from '../services/audio'
+import { queueOperation } from '../services/retryQueue'
 import { EXPENSE_CATEGORIES, PAYMENT_METHODS, OWNERS } from '../config'
 
 function ToggleGroup({ options, value, onChange, colorActive = 'bg-accent-blue text-white' }) {
@@ -58,8 +59,12 @@ export default function AddExpense() {
         amount: parseInt(form.amount, 10),
       }
       const saved = appendExpense(entry)
-      writeExpense(saved).catch(() => {})
-      logExpense(entry).catch(() => {})
+      writeExpense(saved).catch(err => {
+        queueOperation(() => writeExpense(saved), 'writeExpense', {})
+      })
+      logExpense(entry).catch(err => {
+        queueOperation(() => logExpense(entry), 'logExpense', {})
+      })
       setLog([...loadExpenseLog()].reverse())
 
       playConfirmBeep()

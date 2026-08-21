@@ -5,6 +5,7 @@ import { logManualRevenue } from '../services/sheetsApi'
 import { writeSession } from '../services/firebaseDb'
 import { useToast } from '../components/Toast'
 import { playConfirmBeep } from '../services/audio'
+import { queueOperation } from '../services/retryQueue'
 
 export default function AddData() {
   const today = new Date().toLocaleDateString('en-CA')
@@ -38,13 +39,21 @@ export default function AddData() {
         players: customers,
         notes: form.notes,
       })
-      writeSession(saved).catch(() => {})
+      writeSession(saved).catch(err => {
+        queueOperation(() => writeSession(saved), 'writeSession', {})
+      })
       logManualRevenue({
         date: form.date,
         otherRevenue: amount,
         customers,
         notes: form.notes,
-      }).catch(() => {})
+      }).catch(err => {
+        queueOperation(
+          () => logManualRevenue({ date: form.date, otherRevenue: amount, customers, notes: form.notes }),
+          'logManualRevenue',
+          {}
+        )
+      })
 
       playConfirmBeep()
       toast('Revenue logged successfully', 'success')
